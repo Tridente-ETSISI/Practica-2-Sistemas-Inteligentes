@@ -1,0 +1,23 @@
+{
+  "_comentario": "Perfil de usuario para filtrar la cartelera. Pasa a --perfil mi_perfil.json",
+  "generos": {
+    "Acción": 6.5,
+    "Aventura": 6.5,
+    "Animación": 7.0,
+    "Comedia": 6.0,
+    "Drama": 7.0,
+    "Terror": 6.5,
+    "Thriller": 6.5,
+    "Ciencia ficción": 6.0,
+    "Romance": 5.5,
+    "Documental": 7.0,
+    "Fantasía": 6.5,
+    "Musical": 6.0
+  },
+  "directores_favoritos": [
+    "Christopher Nolan",
+    "Denis Villeneuve",
+    "Martin Scorsese"
+  ],
+  "nota_minima_global": 5.0
+}

@@ -1,0 +1,46 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: movie-agent-api
+    command: ["python", "api_server.py", "--host", "0.0.0.0", "--port", "8080"]
+    env_file:
+      - .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  bot:
+    build:
+      context: .
+    container_name: movie-agent-bot
+    command: ["python", "bot/telegram_bot.py"]
+    env_file:
+      - .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  cartelera:
+    build:
+      context: .
+    container_name: movie-agent-cartelera
+    command: ["python", "cartelera/cartelera_madrid.py", "--telegram"]
+    env_file:
+      - .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    restart: "no"
+    profiles:
+      - tools
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+# volumes:
+#   - .:/app
