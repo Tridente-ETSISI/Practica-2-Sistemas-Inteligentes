@@ -20,10 +20,12 @@ import re
 import sys
 import urllib.parse
 import urllib.request
+import asyncio
 
 # ── Ajustar path para importar el scraper ─────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scraper"))
 from movie_scraper import get_movie_info
+from cartelera_scraper import get_cartelera_madrid_playwright
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -47,7 +49,8 @@ DEFAULT_USER_PROFILE = {
 }
 
 BASE_URL = "https://www.ecartelera.com"
-CARTELERA_URL = f"{BASE_URL}/cartelera-cine-madrid/"
+# CARTELERA_URL = f"{BASE_URL}/cartelera-cine-madrid/"
+CARTELERA_URL = f"{BASE_URL}/cines/0,30,1.html"
 
 # ──────────────────────────────────────────────
 # DESCARGA Y PARSEO DE CARTELERA
@@ -130,9 +133,13 @@ def parse_cines_from_movie_page(html: str) -> tuple[list[str], str | None]:
 def get_cartelera_madrid(filtro_cine: str | None = None) -> list[dict]:
     """Descarga y devuelve la cartelera de Madrid."""
     print("[Cartelera] Descargando cartelera de Madrid...", file=sys.stderr)
-    html = download_page(CARTELERA_URL)
-    peliculas = parse_cartelera(html)
-    print(f"[Cartelera] {len(peliculas)} películas encontradas.", file=sys.stderr)
+    # html = download_page(CARTELERA_URL)
+    # peliculas = parse_cartelera(html)
+    # if len(peliculas) == 0:
+    #     print(f"[Cartelera] {len(peliculas)} películas encontradas.", file=sys.stderr)
+    # else:
+    peliculas = get_cartelera_madrid_playwright()  # Usar scraper con Playwright para obtener datos más completos
+    print(f"[Cartelera] {len(peliculas)} películas encontradas con scraper.", file=sys.stderr)
 
     # Enriquecer con cines y género (solo las primeras 20 para no saturar)
     for peli in peliculas[:20]:
@@ -269,7 +276,6 @@ def format_telegram_message(peliculas: list[dict], filtro_cine: str | None = Non
         lines.append(block)
 
     return "".join(lines)
-
 
 # ──────────────────────────────────────────────
 # ENVIAR POR TELEGRAM

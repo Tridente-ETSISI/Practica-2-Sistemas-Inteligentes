@@ -267,7 +267,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_espera += "...\n_Esto puede tardar unos minutos_"
             await wait_msg.edit_text(msg_espera, parse_mode="Markdown")
 
-            peliculas = get_cartelera_madrid(filtro_cine=filtro_cine)
+            peliculas = await asyncio.to_thread(get_cartelera_madrid, filtro_cine=filtro_cine)
             await wait_msg.edit_text(
                 f"📽 Consultando datos IMDB para {len(peliculas)} películas...\n_Esto puede tardar unos minutos_",
                 parse_mode="Markdown"
