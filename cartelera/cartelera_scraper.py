@@ -6,13 +6,13 @@ Dos fuentes independientes para redundancia:
   - Fuente 1: ecartelera.com  → get_cartelera_ecartelera()
   - Fuente 2: sensacine.com   → get_cartelera_sensacine()
 
-Función principal: get_cartelera_madrid()
-  Intenta ecartelera primero. Si falla, usa sensacine automáticamente.
+Función principal: get_cartelera_madrid_playwright()
+  Intenta ecartelera primero. Si falla o devuelve vacío, usa sensacine.
 
 Cada película devuelta tiene este formato:
   {
     "titulo":        str,
-    "url_ficha":     str,   # URL a la ficha en la fuente
+    "url_ficha":     str,        # URL a la ficha en la fuente
     "genero":        str | None,
     "duracion_min":  int | None,
     "director":      str | None,
@@ -26,6 +26,10 @@ Uso standalone:
   python cartelera_scraper.py --fuente sensacine
   python cartelera_scraper.py --cine "Kinépolis"
   python cartelera_scraper.py --json
+
+Diagnóstico (si devuelve 0 películas):
+  python cartelera_scraper.py --debug-html ecartelera
+  → guarda /tmp/debug_ecartelera.html para inspeccionar los selectores CSS reales
 """
 
 import argparse
@@ -35,9 +39,9 @@ import sys
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-# ──────────────────────────────────────────────
-# CONFIGURACIÓN PLAYWRIGHT (igual que movie_scraper)
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIGURACIÓN PLAYWRIGHT
+# ──────────────────────────────────────────────────────────────────────────────
 
 EVASION_JS = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -62,9 +66,12 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+# ──────────────────────────────────────────────────────────────────────────────
+# HELPERS INTERNOS
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _make_context(playwright):
-    """Crea browser + context con evasión anti-bot. Reutilizable."""
+    """Crea browser + context con evasión anti-bot."""
     browser = playwright.chromium.launch(headless=True, args=CHROMIUM_ARGS)
     context = browser.new_context(
         user_agent=USER_AGENT,
@@ -79,32 +86,51 @@ def _make_context(playwright):
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
-        }
+        },
     )
     context.add_init_script(EVASION_JS)
     return browser, context
 
 
-def _accept_cookies(page):
-    """Intenta cerrar banners de cookies comunes."""
+def _accept_cookies(page) -> None:
+    """
+    Intenta cerrar banners de cookies comunes.
+
+    ecartelera.com usa consentmanager.net cuyo botón "Aceptar todo" es un <a>
+    con id="cmpwelcomebtnyes", no un <button>. Mientras el banner está activo,
+    el <body> tiene overflow:hidden y el contenido real no es accesible.
+
+    Orden de selectores: primero los específicos de consentmanager (ecartelera),
+    luego los genéricos para otras webs.
+    """
     for selector in [
-        '#didomi-notice-agree-button',
+        # consentmanager.net (ecartelera.com)
+        "#cmpwelcomebtnyes",
+        "a.cmpboxbtnyes",
+        # didomi (sensacine y otras)
+        "#didomi-notice-agree-button",
+        # Textos genéricos — <button> y <a>
         'button:has-text("Aceptar todo")',
+        'a:has-text("Aceptar todo")',
         'button:has-text("Aceptar")',
         'button:has-text("Accept all")',
         'button:has-text("Accept")',
         '[aria-label="Agree"]',
-        '.cc-accept',
+        ".cc-accept",
     ]:
         try:
             page.click(selector, timeout=2500)
-            page.wait_for_timeout(800)
+            # Esperar a que el body recupere el scroll (banner desaparece)
+            page.wait_for_function(
+                "document.body.style.overflow !== 'hidden'",
+                timeout=3000,
+            )
             return
         except Exception:
             continue
 
 
-def _scroll_page(page, steps: int = 5):
+def _scroll_page(page, steps: int = 5) -> None:
     """Scroll progresivo para activar lazy-load."""
     for i in range(steps):
         page.evaluate(f"window.scrollTo(0, {(i + 1) * 600})")
@@ -112,40 +138,56 @@ def _scroll_page(page, steps: int = 5):
 
 
 def _clean(text: str | None) -> str | None:
+    """Normaliza espacios y devuelve None si el resultado está vacío."""
     if not text:
         return None
-    return re.sub(r'\s+', ' ', text).strip() or None
+    return re.sub(r"\s+", " ", text).strip() or None
 
 
 def _parse_duration(text: str | None) -> int | None:
-    """'1h 48min' / '108 min' / '1h' → 108"""
+    """Convierte '1h 48min' / '108 min' / '1h' a minutos enteros."""
     if not text:
         return None
-    hours = re.search(r'(\d+)\s*h', text)
-    mins  = re.search(r'(\d+)\s*min', text)
+    hours = re.search(r"(\d+)\s*h", text)
+    mins  = re.search(r"(\d+)\s*min", text)
     total = 0
     if hours:
         total += int(hours.group(1)) * 60
     if mins:
         total += int(mins.group(1))
-    # Si solo hay un número suelto, asumir minutos
     if not hours and not mins:
-        m = re.search(r'(\d+)', text)
+        m = re.search(r"(\d+)", text)
         if m:
             total = int(m.group(1))
     return total if total > 0 else None
 
 
+def _save_debug_html(page, nombre: str) -> None:
+    """Guarda el HTML renderizado para diagnóstico de selectores."""
+    ruta = f"/tmp/debug_{nombre}.html"
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(page.content())
+    print(f"[debug] HTML guardado en {ruta}", file=sys.stderr)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FUENTE 1: ecartelera.com
-# URL cartelera Madrid: https://www.ecartelera.com/cines/0,30,1.html
-#   (el 30 es el código de la provincia de Madrid)
-# Estructura de la página:
-#   - Lista de cines: .box-cine o article.cine-item
-#   - Nombre del cine: h2.cine-name a  o  .nombre-cine
-#   - Películas en ese cine: ul.pelis li  o  .pelicula-item
-#   - Título película: .titulo-peli a  o  h3 a
-#   - URL ficha: el href del enlace del título
+# URL: https://www.ecartelera.com/cines/0,30,1.html  (30 = provincia Madrid)
+#
+# Estructura real del HTML (verificada mayo 2025):
+#   La página lista películas en cartelera, una por div.pitem:
+#
+#   <div class="pitem">
+#     <p class="title">
+#       <a href="https://www.ecartelera.com/peliculas/nombre/">Título</a>
+#     </p>
+#     <p class="showtimes">
+#       <a href=".../cartelera/">Horarios: N cines</a>
+#     </p>
+#   </div>
+#
+#   NOTA: los nombres de cines individuales NO están en esta vista.
+#   Solo aparece el número total de cines en Madrid donde se proyecta.
 # ══════════════════════════════════════════════════════════════════════════════
 
 ECARTELERA_URL = "https://www.ecartelera.com/cines/0,30,1.html"
@@ -153,97 +195,72 @@ ECARTELERA_URL = "https://www.ecartelera.com/cines/0,30,1.html"
 
 def _parse_ecartelera_page(page) -> list[dict]:
     """
-    Extrae películas y cines del HTML renderizado de ecartelera.com.
+    Extrae películas del HTML renderizado de ecartelera.com.
 
-    ecartelera agrupa la cartelera por CINE: primero aparece el cine,
-    luego las películas que proyecta. Iteramos esa estructura.
+    Estructura real verificada (mayo 2025): la página lista películas
+    agrupadas por pelicula con div.pitem, NO por cine:
 
-    Si los selectores cambian, busca en el HTML:
-      - El bloque de cada cine (suele ser un <article> o <div class="...cine...">)
-      - El nombre del cine (suele ser un <h2> o <h3> dentro de ese bloque)
-      - Las películas (suele ser una <ul> con <li> por cada película)
-      - El enlace al título (un <a> dentro de cada <li>)
+      <div class="pitem">
+        <p class="title">
+          <a href="https://www.ecartelera.com/peliculas/nombre/">Título</a>
+        </p>
+        <p class="showtimes">
+          <a href=".../cartelera/">Horarios: N cines</a>
+        </p>
+      </div>
+
+    Los nombres de cines individuales no están en esta vista; se deja
+    cines=[] para que el enriquecimiento posterior pueda completarlos.
     """
-    peliculas: dict[str, dict] = {}  # titulo → datos (para agrupar cines)
+    peliculas: list[dict] = []
+    seen: set[str] = set()
 
-    # ── Selectores principales ─────────────────────────────────────────────
-    # ecartelera.com usa una estructura tipo:
-    #   <div class="cine-listado"> o <article class="cine">
-    #     <h2 class="titulo-cine"><a>Nombre Cine</a></h2>
-    #     <ul class="listado-pelis">
-    #       <li class="peli-item">
-    #         <a class="titulo" href="/peliculas/xxx">Título</a>
-    #         <span class="genero">Acción</span>
-    #         <span class="duracion">1h 48min</span>
-    #       </li>
-    #     </ul>
-    #   </div>
+    items = page.query_selector_all("div.pitem")
+    print(f"[ecartelera] {len(items)} pitem encontrados.", file=sys.stderr)
 
-    cine_blocks = page.query_selector_all(
-        'div.cine-listado, article.cine, div.cine-item, '
-        '[class*="cine-box"], [class*="box-cine"]'
-    )
+    for item in items:
+        titulo_el = item.query_selector("p.title a, .title a")
+        if not titulo_el:
+            continue
 
-    if not cine_blocks:
-        # Fallback: intentar con selectores más genéricos
-        cine_blocks = page.query_selector_all('article, section.cine')
+        titulo = _clean(titulo_el.inner_text())
+        if not titulo or len(titulo) < 2 or titulo in seen:
+            continue
+        seen.add(titulo)
 
-    print(f"[ecartelera] {len(cine_blocks)} bloques de cine encontrados.", file=sys.stderr)
+        href = titulo_el.get_attribute("href") or ""
+        url_ficha = href if href.startswith("http") else "https://www.ecartelera.com" + href
 
-    for block in cine_blocks:
-        # Nombre del cine
-        nombre_cine_el = block.query_selector(
-            'h2 a, h3 a, .titulo-cine a, .nombre-cine, '
-            '[class*="cine-name"] a, [class*="nombre"] a'
-        )
-        nombre_cine = _clean(nombre_cine_el.inner_text() if nombre_cine_el else None) or "Cine desconocido"
+        # Extraer numero de cines del texto "Horarios: N cines"
+        showtimes_el = item.query_selector("p.showtimes a, .showtimes a")
+        num_cines_str = _clean(showtimes_el.inner_text() if showtimes_el else None) or ""
+        num_match = re.search(r"(\d+)", num_cines_str)
+        num_cines = int(num_match.group(1)) if num_match else 0
 
-        # Películas en ese cine
-        peli_items = block.query_selector_all(
-            'li.peli-item, li.pelicula, [class*="peli-item"], '
-            '[class*="pelicula-item"], ul li'
-        )
+        peliculas.append({
+            "titulo":       titulo,
+            "url_ficha":    url_ficha,
+            "genero":       None,
+            "duracion_min": None,
+            "director":     None,
+            "sinopsis":     None,
+            "cines":        [],
+            "num_cines":    num_cines,
+            "_fuente":      "ecartelera",
+        })
 
-        for item in peli_items:
-            enlace = item.query_selector('a[href*="/peliculas/"], a.titulo, h3 a, h4 a')
-            if not enlace:
-                continue
-
-            titulo = _clean(enlace.inner_text())
-            if not titulo or len(titulo) < 2:
-                continue
-
-            href = enlace.get_attribute("href") or ""
-            url_ficha = ("https://www.ecartelera.com" + href) if href.startswith("/") else href
-
-            # Género y duración (opcionales)
-            genero_el   = item.query_selector('.genero, [class*="genero"], .genre')
-            duracion_el = item.query_selector('.duracion, [class*="duracion"], .runtime, time')
-            genero   = _clean(genero_el.inner_text()   if genero_el   else None)
-            duracion = _parse_duration(duracion_el.inner_text() if duracion_el else None)
-
-            if titulo not in peliculas:
-                peliculas[titulo] = {
-                    "titulo":       titulo,
-                    "url_ficha":    url_ficha,
-                    "genero":       genero,
-                    "duracion_min": duracion,
-                    "director":     None,
-                    "sinopsis":     None,
-                    "cines":        [],
-                    "_fuente":      "ecartelera",
-                }
-
-            if nombre_cine not in peliculas[titulo]["cines"]:
-                peliculas[titulo]["cines"].append(nombre_cine)
-
-    return list(peliculas.values())
+    return peliculas
 
 
-def get_cartelera_ecartelera(filtro_cine: str | None = None) -> list[dict]:
+def get_cartelera_ecartelera(
+    filtro_cine: str | None = None,
+    debug_html: bool = False,
+) -> list[dict]:
     """
     Descarga la cartelera de Madrid desde ecartelera.com usando Playwright.
-    Devuelve lista de películas con sus cines.
+
+    Lanza RuntimeError si el scraping falla o devuelve 0 películas,
+    para que el orquestador pueda activar el fallback a sensacine.
     """
     print("[ecartelera] Cargando cartelera de Madrid...", file=sys.stderr)
 
@@ -254,35 +271,37 @@ def get_cartelera_ecartelera(filtro_cine: str | None = None) -> list[dict]:
             page.goto(ECARTELERA_URL, wait_until="domcontentloaded", timeout=30000)
             _accept_cookies(page)
 
-            # Esperar a que cargue el contenido principal
             try:
-                page.wait_for_selector(
-                    'div.cine-listado, article.cine, [class*="cine-box"], li.peli-item',
-                    timeout=10000
-                )
+                # div.pitem es el selector real en la versión actual de ecartelera
+                page.wait_for_selector("div.pitem", timeout=10000)
             except PlaywrightTimeout:
-                # Si no aparecen los selectores exactos, dar tiempo extra al JS
+                # Si no aparece en 10s, dar tiempo extra al JS
                 page.wait_for_timeout(4000)
 
             _scroll_page(page, steps=6)
             page.wait_for_timeout(1000)
 
+            if debug_html:
+                _save_debug_html(page, "ecartelera")
+
             peliculas = _parse_ecartelera_page(page)
-            print(f"[ecartelera] {len(peliculas)} películas extraídas.", file=sys.stderr)
 
-        except Exception as e:
-            browser.close()
-            raise RuntimeError(f"Error scraping ecartelera: {e}")
         finally:
+            # FIX: browser.close() solo una vez, siempre en finally
             browser.close()
 
-    # Filtro por cine
+    print(f"[ecartelera] {len(peliculas)} películas extraídas.", file=sys.stderr)
+
+    if not peliculas:
+        # Lanzar excepción para activar el fallback en get_cartelera_madrid_playwright
+        raise RuntimeError(
+            "ecartelera devolvió 0 películas. "
+            "Ejecuta con --debug-html ecartelera para inspeccionar los selectores."
+        )
+
     if filtro_cine:
         fl = filtro_cine.lower()
-        peliculas = [
-            p for p in peliculas
-            if any(fl in c.lower() for c in p["cines"])
-        ]
+        peliculas = [p for p in peliculas if any(fl in c.lower() for c in p["cines"])]
         print(f"[ecartelera] {len(peliculas)} películas en '{filtro_cine}'.", file=sys.stderr)
 
     return peliculas
@@ -290,49 +309,40 @@ def get_cartelera_ecartelera(filtro_cine: str | None = None) -> list[dict]:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FUENTE 2: sensacine.com
-# URL cartelera Madrid: https://www.sensacine.com/cines/madrid/
-# Estructura de la página:
-#   - Lista de películas: .jcarousel-item  o  article.card-movie
-#   - O bien agrupada por cine igual que ecartelera
-#   Sensacine tiene dos vistas: "por película" y "por cine".
-#   Usamos la vista por película para simplificar:
-#   https://www.sensacine.com/peliculas/en-cines/?page=1
-#   y luego https://www.sensacine.com/cines/madrid/ para los cines.
+# URLs:
+#   Películas en cartelera: https://www.sensacine.com/peliculas/en-cines/
+#   Cines de Madrid:        https://www.sensacine.com/cines/madrid/
+#
+# Estructura esperada:
+#   <article class="card entity-card ...">
+#     <a class="meta-title-link" href="/peliculas/xxx/">Título</a>
+#     <span class="what-time-bloc-txt">Género</span>
+#     <div class="meta-body-direction"><span>Director</span></div>
+#     <div class="synopsis-text">Sinopsis...</div>
+#     <span class="runtime">1h 48min</span>
+#   </article>
 # ══════════════════════════════════════════════════════════════════════════════
 
-SENSACINE_CARTELERA_URL = "https://www.sensacine.com/peliculas/en-cines/"
+SENSACINE_CARTELERA_URL   = "https://www.sensacine.com/peliculas/en-cines/"
 SENSACINE_CINES_MADRID_URL = "https://www.sensacine.com/cines/madrid/"
 
 
 def _parse_sensacine_peliculas(page) -> list[dict]:
     """
     Extrae la lista de películas en cartelera desde sensacine.com/peliculas/en-cines/
-
-    Sensacine estructura cada película en una tarjeta:
-      <article class="card entity-card entity-card-list ...">
-        <a href="/peliculas/pelicula-xxxxx/" class="meta-title-link">Título</a>
-        <span class="what-time-bloc-txt">Género</span>
-        <div class="meta-body-item meta-body-direction">
-          Director: <span>Nombre</span>
-        </div>
-        <div class="synopsis-text">Sinopsis...</div>
-        <span class="runtime">1h 48min</span>
-      </article>
+    Los cines se rellenan en un paso posterior con _parse_sensacine_cines().
     """
-    peliculas = []
+    peliculas: list[dict] = []
 
-    # Selectores de tarjetas de película en sensacine
     cards = page.query_selector_all(
-        'article.card, article[class*="entity-card"], '
-        '.card-movie, [class*="movie-card"], li.mdl'
+        "article.card, article[class*='entity-card'], "
+        ".card-movie, [class*='movie-card'], li.mdl"
     )
-
     print(f"[sensacine] {len(cards)} tarjetas encontradas.", file=sys.stderr)
 
     for card in cards:
-        # Título y URL
         enlace = card.query_selector(
-            'a.meta-title-link, a[class*="title"], h2 a, h3 a, .title a'
+            "a.meta-title-link, a[class*='title'], h2 a, h3 a, .title a"
         )
         if not enlace:
             continue
@@ -342,40 +352,33 @@ def _parse_sensacine_peliculas(page) -> list[dict]:
             continue
 
         href = enlace.get_attribute("href") or ""
-        url_ficha = ("https://www.sensacine.com" + href) if href.startswith("/") else href
+        url_ficha = (
+            "https://www.sensacine.com" + href if href.startswith("/") else href
+        )
 
-        # Género
         genero_el = card.query_selector(
-            '.what-time-bloc-txt, .genre, [class*="genre"], '
-            '.meta-body-item:first-child span'
+            ".what-time-bloc-txt, .genre, [class*='genre'], "
+            ".meta-body-item:first-child span"
         )
-        genero = _clean(genero_el.inner_text() if genero_el else None)
-
-        # Director
         director_el = card.query_selector(
-            '.meta-body-direction span, [class*="director"] span, '
-            '[class*="direction"] a'
+            ".meta-body-direction span, [class*='director'] span, "
+            "[class*='direction'] a"
         )
-        director = _clean(director_el.inner_text() if director_el else None)
-
-        # Sinopsis
         sinopsis_el = card.query_selector(
-            '.synopsis-text, .synopsis, [class*="synopsis"], .description'
+            ".synopsis-text, .synopsis, [class*='synopsis'], .description"
         )
-        sinopsis = _clean(sinopsis_el.inner_text() if sinopsis_el else None)
-
-        # Duración
-        duracion_el = card.query_selector('.runtime, time, [class*="runtime"], [class*="duration"]')
-        duracion = _parse_duration(duracion_el.inner_text() if duracion_el else None)
+        duracion_el = card.query_selector(
+            ".runtime, time, [class*='runtime'], [class*='duration']"
+        )
 
         peliculas.append({
             "titulo":       titulo,
             "url_ficha":    url_ficha,
-            "genero":       genero,
-            "duracion_min": duracion,
-            "director":     director,
-            "sinopsis":     sinopsis,
-            "cines":        [],  # se rellena después con _parse_sensacine_cines
+            "genero":       _clean(genero_el.inner_text()   if genero_el   else None),
+            "duracion_min": _parse_duration(duracion_el.inner_text() if duracion_el else None),
+            "director":     _clean(director_el.inner_text() if director_el else None),
+            "sinopsis":     _clean(sinopsis_el.inner_text() if sinopsis_el else None),
+            "cines":        [],
             "_fuente":      "sensacine",
         })
 
@@ -385,48 +388,68 @@ def _parse_sensacine_peliculas(page) -> list[dict]:
 def _parse_sensacine_cines(page) -> dict[str, list[str]]:
     """
     Extrae qué películas están en qué cines de Madrid desde sensacine.com/cines/madrid/
-    Devuelve un dict: titulo_pelicula → [cine1, cine2, ...]
-
-    Sensacine agrupa por cine:
-      <div class="theater-block">
-        <h2 class="theater-name"><a>Nombre del Cine</a></h2>
-        <ul class="theater-movies">
-          <li><a class="meta-title-link">Título Película</a></li>
-        </ul>
-      </div>
+    Devuelve: { titulo_pelicula: [cine1, cine2, ...] }
     """
     resultado: dict[str, list[str]] = {}
 
     cine_blocks = page.query_selector_all(
-        'div.theater-block, [class*="theater-block"], '
-        'article.cinema, [class*="cinema-item"]'
+        "div.theater-block, [class*='theater-block'], "
+        "article.cinema, [class*='cinema-item']"
     )
-
     print(f"[sensacine] {len(cine_blocks)} cines encontrados.", file=sys.stderr)
 
     for block in cine_blocks:
         nombre_el = block.query_selector(
-            'h2 a, h3 a, .theater-name a, [class*="cinema-name"] a, '
-            '[class*="theater-name"]'
+            "h2 a, h3 a, .theater-name a, [class*='cinema-name'] a, "
+            "[class*='theater-name']"
         )
-        nombre_cine = _clean(nombre_el.inner_text() if nombre_el else None) or "Cine desconocido"
+        nombre_cine = (
+            _clean(nombre_el.inner_text() if nombre_el else None) or "Cine desconocido"
+        )
 
         peli_links = block.query_selector_all(
-            'a.meta-title-link, [class*="movie"] a, li a[href*="pelicula"]'
+            "a.meta-title-link, [class*='movie'] a, li a[href*='pelicula']"
         )
         for link in peli_links:
             titulo = _clean(link.inner_text())
             if not titulo:
                 continue
-            if titulo not in resultado:
-                resultado[titulo] = []
+            resultado.setdefault(titulo, [])
             if nombre_cine not in resultado[titulo]:
                 resultado[titulo].append(nombre_cine)
 
     return resultado
 
 
-def get_cartelera_sensacine(filtro_cine: str | None = None) -> list[dict]:
+def _match_cines(
+    peliculas: list[dict],
+    cines_por_pelicula: dict[str, list[str]],
+) -> None:
+    """
+    Asigna in-place la lista de cines a cada película.
+    Intenta coincidencia exacta primero; si falla, búsqueda tolerante por
+    subcadena, pero solo si el título más corto tiene al menos 5 caracteres
+    para evitar falsos positivos con títulos muy cortos (p.ej. "It").
+    """
+    for peli in peliculas:
+        cines = cines_por_pelicula.get(peli["titulo"], [])
+        if not cines:
+            tl = peli["titulo"].lower()
+            # Solo buscar si el título es suficientemente largo
+            if len(tl) >= 5:
+                for titulo_cines, lista_cines in cines_por_pelicula.items():
+                    tc = titulo_cines.lower()
+                    # Exigimos que ambos tengan longitud mínima para el match parcial
+                    if len(tc) >= 5 and (tl in tc or tc in tl):
+                        cines = lista_cines
+                        break
+        peli["cines"] = cines
+
+
+def get_cartelera_sensacine(
+    filtro_cine: str | None = None,
+    debug_html: bool = False,
+) -> list[dict]:
     """
     Descarga la cartelera de Madrid desde sensacine.com usando Playwright.
     Combina la lista de películas con la información de cines de Madrid.
@@ -435,23 +458,23 @@ def get_cartelera_sensacine(filtro_cine: str | None = None) -> list[dict]:
 
     with sync_playwright() as p:
         browser, context = _make_context(p)
-
         try:
-            # ── Paso A: lista de películas en cartelera ────────────────────
+            # ── Paso A: lista de películas ─────────────────────────────────
             page = context.new_page()
             page.goto(SENSACINE_CARTELERA_URL, wait_until="domcontentloaded", timeout=30000)
             _accept_cookies(page)
-
             try:
                 page.wait_for_selector(
-                    'article.card, article[class*="entity-card"], .card-movie',
-                    timeout=10000
+                    "article.card, article[class*='entity-card'], .card-movie",
+                    timeout=10000,
                 )
             except PlaywrightTimeout:
                 page.wait_for_timeout(4000)
-
             _scroll_page(page, steps=8)
             page.wait_for_timeout(1000)
+
+            if debug_html:
+                _save_debug_html(page, "sensacine_peliculas")
 
             peliculas = _parse_sensacine_peliculas(page)
             print(f"[sensacine] {len(peliculas)} películas extraídas.", file=sys.stderr)
@@ -460,46 +483,30 @@ def get_cartelera_sensacine(filtro_cine: str | None = None) -> list[dict]:
             page2 = context.new_page()
             page2.goto(SENSACINE_CINES_MADRID_URL, wait_until="domcontentloaded", timeout=30000)
             _accept_cookies(page2)
-
             try:
                 page2.wait_for_selector(
-                    'div.theater-block, [class*="theater-block"], article.cinema',
-                    timeout=10000
+                    "div.theater-block, [class*='theater-block'], article.cinema",
+                    timeout=10000,
                 )
             except PlaywrightTimeout:
                 page2.wait_for_timeout(4000)
-
             _scroll_page(page2, steps=6)
             page2.wait_for_timeout(1000)
 
+            if debug_html:
+                _save_debug_html(page2, "sensacine_cines")
+
             cines_por_pelicula = _parse_sensacine_cines(page2)
 
-            # ── Combinar: asignar cines a cada película ────────────────────
-            for peli in peliculas:
-                # Buscar coincidencia de título (exacta o parcial)
-                cines = cines_por_pelicula.get(peli["titulo"], [])
-                if not cines:
-                    # Búsqueda tolerante: el título de la lista puede tener pequeñas diferencias
-                    titulo_lower = peli["titulo"].lower()
-                    for titulo_cines, lista_cines in cines_por_pelicula.items():
-                        if titulo_lower in titulo_cines.lower() or titulo_cines.lower() in titulo_lower:
-                            cines = lista_cines
-                            break
-                peli["cines"] = cines
-
-        except Exception as e:
-            browser.close()
-            raise RuntimeError(f"Error scraping sensacine: {e}")
         finally:
+            # FIX: browser.close() solo una vez, siempre en finally
             browser.close()
 
-    # Filtro por cine
+    _match_cines(peliculas, cines_por_pelicula)
+
     if filtro_cine:
         fl = filtro_cine.lower()
-        peliculas = [
-            p for p in peliculas
-            if any(fl in c.lower() for c in p["cines"])
-        ]
+        peliculas = [p for p in peliculas if any(fl in c.lower() for c in p["cines"])]
         print(f"[sensacine] {len(peliculas)} películas en '{filtro_cine}'.", file=sys.stderr)
 
     return peliculas
@@ -511,62 +518,77 @@ def get_cartelera_sensacine(filtro_cine: str | None = None) -> list[dict]:
 
 def get_cartelera_madrid_playwright(
     filtro_cine: str | None = None,
-    fuente: str = "auto"
+    fuente: str = "auto",
+    debug_html: bool = False,
 ) -> list[dict]:
     """
     Obtiene la cartelera de cine de Madrid.
 
     Parámetros:
-      filtro_cine: si se especifica, solo devuelve películas en ese cine (coincidencia parcial)
-      fuente:      "auto"       → intenta ecartelera, si falla usa sensacine
-                   "ecartelera" → fuerza ecartelera
-                   "sensacine"  → fuerza sensacine
+      filtro_cine : solo devuelve películas en ese cine (coincidencia parcial).
+      fuente      : "auto"       → ecartelera primero, sensacine si falla/vacío.
+                    "ecartelera" → fuerza ecartelera.
+                    "sensacine"  → fuerza sensacine.
+      debug_html  : guarda HTML renderizado en /tmp/ para depurar selectores.
 
-    Devuelve lista de dicts con:
-      titulo, url_ficha, genero, duracion_min, director, sinopsis, cines, _fuente
+    Devuelve lista de dicts: titulo, url_ficha, genero, duracion_min,
+                             director, sinopsis, cines, _fuente.
     """
     if fuente == "ecartelera":
-        return get_cartelera_ecartelera(filtro_cine)
+        return get_cartelera_ecartelera(filtro_cine, debug_html=debug_html)
 
     if fuente == "sensacine":
-        return get_cartelera_sensacine(filtro_cine)
+        return get_cartelera_sensacine(filtro_cine, debug_html=debug_html)
 
     # "auto": ecartelera primero, sensacine como fallback
     try:
-        resultado = get_cartelera_ecartelera(filtro_cine)
-        if resultado:
-            return resultado
-        print("[cartelera] ecartelera devolvió 0 resultados, probando sensacine...", file=sys.stderr)
+        return get_cartelera_ecartelera(filtro_cine, debug_html=debug_html)
     except Exception as e:
-        print(f"[cartelera] ecartelera falló: {e}\n  → Probando sensacine...", file=sys.stderr)
+        print(
+            f"[cartelera] ecartelera falló: {e}\n  → Probando sensacine...",
+            file=sys.stderr,
+        )
 
-    return get_cartelera_sensacine(filtro_cine)
+    return get_cartelera_sensacine(filtro_cine, debug_html=debug_html)
 
 
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # CLI para pruebas standalone
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Cartelera de Madrid con Playwright")
     parser.add_argument("--cine",   help="Filtrar por nombre de cine (parcial)")
     parser.add_argument("--fuente", choices=["auto", "ecartelera", "sensacine"], default="auto")
     parser.add_argument("--json",   action="store_true", help="Salida JSON")
+    parser.add_argument(
+        "--debug-html",
+        choices=["ecartelera", "sensacine"],
+        metavar="FUENTE",
+        help="Guarda el HTML renderizado en /tmp/ para inspeccionar selectores CSS",
+    )
     args = parser.parse_args()
 
-    peliculas = get_cartelera_madrid_playwright(filtro_cine=args.cine, fuente=args.fuente)
+    debug = args.debug_html is not None
+    fuente = args.debug_html if debug else args.fuente
+
+    peliculas = get_cartelera_madrid_playwright(
+        filtro_cine=args.cine,
+        fuente=fuente,
+        debug_html=debug,
+    )
 
     if args.json:
         print(json.dumps(peliculas, ensure_ascii=False, indent=2))
         return
 
-    print(f"\n{'═'*55}")
+    print(f"\n{'═' * 55}")
     print(f"  Cartelera de Madrid — {len(peliculas)} películas")
-    print(f"{'═'*55}")
+    print(f"{'═' * 55}")
     for p in peliculas:
         cines_str = ", ".join(p["cines"][:3]) if p["cines"] else "cines no disponibles"
         if len(p["cines"]) > 3:
-            cines_str += f" (+{len(p['cines'])-3})"
+            cines_str += f" (+{len(p['cines']) - 3})"
         dur = f"{p['duracion_min']} min" if p["duracion_min"] else "? min"
         print(f"\n🎬 {p['titulo']}  [{dur}]  [{p['_fuente']}]")
         if p.get("genero"):
@@ -575,7 +597,8 @@ def main():
             print(f"   Director : {p['director']}")
         print(f"   Cines    : {cines_str}")
         if p.get("sinopsis"):
-            print(f"   Sinopsis : {p['sinopsis'][:120]}...")
+            sin = p["sinopsis"]
+            print(f"   Sinopsis : {sin[:120]}{'...' if len(sin) > 120 else ''}")
 
 
 if __name__ == "__main__":

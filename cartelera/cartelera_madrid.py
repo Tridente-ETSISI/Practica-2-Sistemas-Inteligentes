@@ -1,16 +1,27 @@
 """
 cartelera_madrid.py
-Obtiene la cartelera de cine de Madrid desde ecartelera.com,
-enriquece con datos de IMDB y filtra según el perfil del usuario.
+
+Orquesta la cartelera de cine de Madrid:
+  1. Obtiene películas en cartelera via cartelera_scraper.py (Playwright).
+  2. Enriquece con datos de IMDB via movie_scraper.py.
+  3. Filtra según el perfil del usuario (nota mínima por género, directores).
+  4. Formatea y opcionalmente envía el resultado por Telegram.
 
 Uso:
-  python cartelera_madrid.py                        # cartelera completa
+  python cartelera_madrid.py                         # cartelera completa
   python cartelera_madrid.py --cine "Cine Kinépolis" # filtrar por cine
-  python cartelera_madrid.py --telegram              # enviar resultado por Telegram
-  python cartelera_madrid.py --min-nota 7.0          # solo películas con nota >= 7.0
+  python cartelera_madrid.py --telegram              # enviar por Telegram
+  python cartelera_madrid.py --min-nota 7.0          # solo nota >= 7.0
+  python cartelera_madrid.py --sin-filtro            # sin filtro de perfil
+  python cartelera_madrid.py --json                  # salida JSON
 
 Cron (todos los lunes a las 9:00):
-  0 9 * * 1 cd /ruta/al/proyecto && python cartelera/cartelera_madrid.py --telegram >> /var/log/cartelera.log 2>&1
+  0 9 * * 1 cd /ruta/proyecto && python cartelera/cartelera_madrid.py --telegram \
+    >> /var/log/cartelera.log 2>&1
+
+Variables de entorno:
+  TELEGRAM_BOT_TOKEN  → token del bot de Telegram
+  TELEGRAM_CHAT_ID    → chat_id destino del mensaje
 """
 
 import argparse
@@ -18,235 +29,199 @@ import json
 import os
 import re
 import sys
-import urllib.parse
 import urllib.request
-import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ── Ajustar path para importar el scraper ─────────────────────────────────────
+# ── Path para importar módulos del proyecto ───────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scraper"))
-from movie_scraper import get_movie_info
-from cartelera_scraper import get_cartelera_madrid_playwright
+from movie_scraper import get_movie_info                            # noqa: E402
+from cartelera_scraper import get_cartelera_madrid_playwright       # noqa: E402
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIGURACIÓN
+# ──────────────────────────────────────────────────────────────────────────────
 
-# Perfil de usuario por defecto (se puede editar o sobreescribir con --perfil JSON)
-DEFAULT_USER_PROFILE = {
+TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID:   str = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# Número máximo de películas a las que se consultará IMDB.
+# El scraper ya incluye género, director y sinopsis de la web de cartelera;
+# IMDB añade nota, votos y URL oficial. Ajustar según velocidad deseada.
+MAX_IMDB_ENRICHMENT: int = 30
+MAX_WORKERS: int = 8  # peticiones simultáneas a IMDB
+MAX_WORKERS: int = 8  # peticiones simultáneas a IMDB
+
+# Perfil de usuario por defecto.
+# Se puede sobreescribir con --perfil <ruta_json>.
+DEFAULT_USER_PROFILE: dict = {
     "generos": {
-        "Acción": 6.5,
-        "Aventura": 6.5,
-        "Animación": 7.0,
-        "Comedia": 6.0,
-        "Drama": 7.0,
-        "Terror": 6.0,
-        "Thriller": 6.5,
-        "Ciencia ficción": 6.0,
-        "Romance": 5.5,
-        "Documental": 7.0,
+        "Acción":         6.5,
+        "Aventura":       6.5,
+        "Animación":      7.0,
+        "Comedia":        6.0,
+        "Drama":          7.0,
+        "Terror":         6.0,
+        "Thriller":       6.5,
+        "Ciencia ficción":6.0,
+        "Romance":        5.5,
+        "Documental":     7.0,
     },
-    "directores_favoritos": [],      # ej: ["Christopher Nolan", "Denis Villeneuve"]
-    "nota_minima_global": 5.0,       # filtro base si el género no está en el perfil
+    "directores_favoritos": [],   # ej: ["Christopher Nolan", "Denis Villeneuve"]
+    "nota_minima_global":   5.0,  # umbral si el género no está en el perfil
 }
 
-BASE_URL = "https://www.ecartelera.com"
-# CARTELERA_URL = f"{BASE_URL}/cartelera-cine-madrid/"
-CARTELERA_URL = f"{BASE_URL}/cines/0,30,1.html"
 
-# ──────────────────────────────────────────────
-# DESCARGA Y PARSEO DE CARTELERA
-# ──────────────────────────────────────────────
-
-def download_page(url: str) -> str:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-            "Accept-Language": "es-ES,es;q=0.9",
-        }
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8", errors="replace")
-
-
-def parse_cartelera(html: str) -> list[dict]:
-    """
-    Extrae lista de películas en cartelera desde ecartelera.com.
-    Devuelve lista de dicts con: titulo, url, cines, genero
-    """
-    peliculas = []
-    seen = set()
-
-    # Patrón para bloques de película en ecartelera
-    # Buscar enlaces a fichas de película
-    pattern = re.compile(
-        r'href="(/peliculas/[^"]+)"[^>]*>([^<]{3,80})</a>',
-        re.IGNORECASE
-    )
-
-    for match in pattern.finditer(html):
-        url_rel, titulo = match.group(1), match.group(2).strip()
-        titulo = re.sub(r'\s+', ' ', titulo).strip()
-
-        # Filtrar títulos que son claramente navegación / no películas
-        if len(titulo) < 2 or titulo.lower() in {"ver más", "más info", "comprar", "trailer", "ver"}:
-            continue
-        if titulo in seen:
-            continue
-        seen.add(titulo)
-
-        peliculas.append({
-            "titulo": titulo,
-            "url_ecartelera": BASE_URL + url_rel,
-            "genero": None,
-            "cines": []
-        })
-
-    return peliculas
-
-
-def parse_cines_from_movie_page(html: str) -> tuple[list[str], str | None]:
-    """Extrae lista de cines y género desde la página de una película en ecartelera."""
-    cines = []
-    genero = None
-
-    # Extraer género
-    gen_match = re.search(r'[Gg]énero[s]?\s*:?\s*<[^>]+>([^<]{3,40})</[^>]+>', html)
-    if gen_match:
-        genero = gen_match.group(1).strip()
-    
-    # Alternativa para género
-    if not genero:
-        gen_match2 = re.search(r'"genre"\s*:\s*"([^"]+)"', html)
-        if gen_match2:
-            genero = gen_match2.group(1).strip()
-
-    # Extraer cines (nombres de sala)
-    cine_pattern = re.compile(r'href="/cines/[^"]*"[^>]*>([^<]{3,60})</a>', re.IGNORECASE)
-    for m in cine_pattern.finditer(html):
-        nombre = m.group(1).strip()
-        if nombre and nombre not in cines:
-            cines.append(nombre)
-
-    return cines, genero
-
+# ──────────────────────────────────────────────────────────────────────────────
+# OBTENER CARTELERA
+# ──────────────────────────────────────────────────────────────────────────────
 
 def get_cartelera_madrid(filtro_cine: str | None = None) -> list[dict]:
-    """Descarga y devuelve la cartelera de Madrid."""
+    """
+    Devuelve la cartelera de Madrid usando el scraper Playwright.
+
+    El scraper ya incluye: titulo, url_ficha, genero, duracion_min,
+    director, sinopsis, cines, _fuente.
+    Esta función NO hace peticiones adicionales; confía en lo que
+    devuelve cartelera_scraper.py (eliminando la duplicación anterior).
+    """
     print("[Cartelera] Descargando cartelera de Madrid...", file=sys.stderr)
-    # html = download_page(CARTELERA_URL)
-    # peliculas = parse_cartelera(html)
-    # if len(peliculas) == 0:
-    #     print(f"[Cartelera] {len(peliculas)} películas encontradas.", file=sys.stderr)
-    # else:
-    peliculas = get_cartelera_madrid_playwright()  # Usar scraper con Playwright para obtener datos más completos
-    print(f"[Cartelera] {len(peliculas)} películas encontradas con scraper.", file=sys.stderr)
+    peliculas = get_cartelera_madrid_playwright(filtro_cine=filtro_cine)
+    print(f"[Cartelera] {len(peliculas)} películas encontradas.", file=sys.stderr)
+    return peliculas
 
-    # Enriquecer con cines y género (solo las primeras 20 para no saturar)
-    for peli in peliculas[:20]:
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENRIQUECER CON IMDB
+# ──────────────────────────────────────────────────────────────────────────────
+
+def enrich_with_imdb(peliculas: list[dict]) -> list[dict]:
+    """
+    Añade nota, votos y url_imdb a cada película consultando IMDB.
+
+    Las primeras MAX_IMDB_ENRICHMENT se consultan en paralelo con
+    ThreadPoolExecutor para reducir el tiempo de espera notablemente.
+    Las películas fuera de ese límite conservan nota_imdb=None.
+    """
+    # Inicializar campos IMDB en todas las películas
+    for peli in peliculas:
+        peli.setdefault("nota_imdb", None)
+        peli.setdefault("votos",     None)
+        peli.setdefault("url_imdb",  None)
+
+    a_enriquecer = peliculas[:MAX_IMDB_ENRICHMENT]
+    total = len(a_enriquecer)
+
+    def _fetch(args: tuple[int, dict]) -> None:
+        idx, peli = args
         try:
-            peli_html = download_page(peli["url_ecartelera"])
-            cines, genero = parse_cines_from_movie_page(peli_html)
-            peli["cines"] = cines
-            peli["genero"] = genero
+            print(f"[IMDB] ({idx + 1}/{total}) '{peli["titulo"]}'...", file=sys.stderr)
+            imdb_data = get_movie_info(peli["titulo"])
+            peli["nota_imdb"] = imdb_data.get("nota")
+            peli["votos"]     = imdb_data.get("votos")
+            peli["url_imdb"]  = imdb_data.get("url_imdb")
+            # Solo sobreescribir si el scraper de cartelera no los obtuvo
+            if not peli.get("director"):
+                peli["director"] = imdb_data.get("director")
+            if not peli.get("sinopsis"):
+                peli["sinopsis"] = imdb_data.get("sinopsis")
         except Exception as e:
-            print(f"[Cartelera] Error enriqueciendo {peli['titulo']}: {e}", file=sys.stderr)
+            print(f"[IMDB] Error con '{peli["titulo"]}': {e}", file=sys.stderr)
 
-    # Filtrar por cine si se especifica
-    if filtro_cine:
-        filtro_lower = filtro_cine.lower()
-        peliculas = [
-            p for p in peliculas
-            if any(filtro_lower in c.lower() for c in p.get("cines", []))
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [
+            executor.submit(_fetch, (i, peli))
+            for i, peli in enumerate(a_enriquecer)
         ]
-        print(f"[Cartelera] {len(peliculas)} películas en '{filtro_cine}'.", file=sys.stderr)
+        for future in as_completed(futures):
+            future.result()  # propaga excepciones no capturadas en _fetch
 
     return peliculas
 
 
-# ──────────────────────────────────────────────
-# ENRIQUECER CON IMDB
-# ──────────────────────────────────────────────
-
-def enrich_with_imdb(peliculas: list[dict]) -> list[dict]:
-    """Añade datos de IMDB a cada película."""
-    enriched = []
-    for peli in peliculas:
-        try:
-            print(f"[IMDB] Consultando '{peli['titulo']}'...", file=sys.stderr)
-            imdb_data = get_movie_info(peli["titulo"])
-            peli.update({
-                "nota_imdb": imdb_data.get("nota"),
-                "votos": imdb_data.get("votos"),
-                "sinopsis": imdb_data.get("sinopsis"),
-                "director": imdb_data.get("director"),
-                "duracion": imdb_data.get("duracion"),
-                "url_imdb": imdb_data.get("url_imdb"),
-            })
-        except Exception as e:
-            print(f"[IMDB] Error con '{peli['titulo']}': {e}", file=sys.stderr)
-            peli.update({"nota_imdb": None, "votos": None, "sinopsis": None,
-                         "director": None, "duracion": None, "url_imdb": None})
-        enriched.append(peli)
-    return enriched
-
-
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # FILTRO POR PERFIL DE USUARIO
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
-def apply_user_profile(peliculas: list[dict], perfil: dict, nota_minima: float | None = None) -> list[dict]:
+def apply_user_profile(
+    peliculas: list[dict],
+    perfil: dict,
+    nota_minima: float | None = None,
+) -> list[dict]:
     """
     Filtra y ordena películas según el perfil del usuario.
-    - Cada género tiene una nota mínima requerida
-    - Los directores favoritos siempre pasan
-    - Se puede añadir una nota mínima global
+
+    Reglas (en orden de prioridad):
+      1. Si el director está en directores_favoritos → siempre incluir.
+      2. Si nota_imdb es None → incluir (no tenemos datos suficientes para excluir).
+      3. Si el género del perfil define una nota mínima → aplicarla.
+      4. Si el género no está en el perfil → usar nota_minima o nota_minima_global.
+
+    El resultado se ordena por nota_imdb descendente (None al final).
     """
-    resultado = []
-    generos = perfil.get("generos", {})
+    generos        = perfil.get("generos", {})
     directores_fav = [d.lower() for d in perfil.get("directores_favoritos", [])]
-    nota_global = nota_minima or perfil.get("nota_minima_global", 5.0)
+    nota_global    = nota_minima if nota_minima is not None else perfil.get("nota_minima_global", 5.0)
+
+    resultado: list[dict] = []
 
     for peli in peliculas:
-        nota = peli.get("nota_imdb")
-        genero = peli.get("genero", "")
+        nota     = peli.get("nota_imdb")
+        genero   = peli.get("genero") or ""
         director = (peli.get("director") or "").lower()
 
-        # Director favorito: siempre incluir
-        if any(fav in director for fav in directores_fav if fav):
+        # Regla 1: director favorito siempre pasa
+        if directores_fav and any(fav in director for fav in directores_fav if fav):
             peli["_razon_inclusion"] = f"Director favorito: {peli.get('director')}"
             resultado.append(peli)
             continue
 
-        # Sin nota no podemos filtrar bien
+        # Regla 2: sin nota
+        #   - si se pasó --min-nota explícita → excluir (no podemos verificar el umbral)
+        #   - si solo hay perfil por género    → incluir (beneficio de la duda)
         if nota is None:
-            peli["_razon_inclusion"] = "Sin datos de nota"
+            if nota_minima is not None:
+                continue  # filtro explícito: sin nota no pasa
+            peli["_razon_inclusion"] = "Sin datos de nota IMDB"
             resultado.append(peli)
             continue
 
-        # Determinar umbral para este género
+        # Regla 3-4: determinar umbral para este género
         umbral = nota_global
         for gen_key, gen_nota in generos.items():
-            if genero and gen_key.lower() in genero.lower():
+            if gen_key.lower() in genero.lower():
                 umbral = gen_nota
                 break
 
         if nota >= umbral:
-            peli["_razon_inclusion"] = f"Nota {nota} ≥ umbral {umbral} para género '{genero}'"
+            peli["_razon_inclusion"] = (
+                f"Nota {nota} ≥ umbral {umbral} (género: '{genero}')"
+            )
             resultado.append(peli)
 
-    # Ordenar por nota descendente
-    resultado.sort(key=lambda p: p.get("nota_imdb") or 0, reverse=True)
+    resultado.sort(key=lambda p: p.get("nota_imdb") or 0.0, reverse=True)
     return resultado
 
 
-# ──────────────────────────────────────────────
-# FORMATEAR MENSAJE
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# FORMATEAR MENSAJE TELEGRAM
+# ──────────────────────────────────────────────────────────────────────────────
 
-def format_telegram_message(peliculas: list[dict], filtro_cine: str | None = None) -> str:
+def _escape_markdown(text: str) -> str:
+    """
+    Escapa caracteres especiales de Markdown de Telegram (modo estándar).
+    Evita que títulos con *, _, [ o ] rompan el mensaje.
+    """
+    return re.sub(r"([*_`\[\]])", r"\\\1", text)
+
+
+def format_telegram_message(
+    peliculas: list[dict],
+    filtro_cine: str | None = None,
+) -> str:
+    """Construye el mensaje Telegram con la cartelera."""
     header = "🎬 *Cartelera de Madrid*"
     if filtro_cine:
-        header += f" — {filtro_cine}"
+        header += f" — {_escape_markdown(filtro_cine)}"
     header += "\n" + "─" * 30 + "\n"
 
     if not peliculas:
@@ -254,104 +229,143 @@ def format_telegram_message(peliculas: list[dict], filtro_cine: str | None = Non
 
     lines = [header]
     for p in peliculas:
+        titulo_esc = _escape_markdown(p["titulo"])
+
         nota_str = f"⭐ {p['nota_imdb']}" if p.get("nota_imdb") else "⭐ N/A"
-        dur_str = f"⏱ {p['duracion']} min" if p.get("duracion") else ""
-        dir_str = f"🎭 {p['director']}" if p.get("director") else ""
+        # duracion_min viene del scraper; duracion (minutos) puede venir de IMDB
+        duracion = p.get("duracion_min") or p.get("duracion")
+        dur_str  = f"⏱ {duracion} min" if duracion else ""
+        dir_str  = f"🎭 {_escape_markdown(p['director'])}" if p.get("director") else ""
+
         cines_str = ""
         if p.get("cines"):
             cines_str = "🏛 " + ", ".join(p["cines"][:3])
             if len(p["cines"]) > 3:
-                cines_str += f" (+{len(p['cines'])-3})"
+                cines_str += f" (+{len(p['cines']) - 3})"
 
-        block = f"*{p['titulo']}*\n"
-        block += f"{nota_str}  {dur_str}  {dir_str}\n".strip() + "\n"
+        fuente_badge = {
+            "ecartelera": "🌐 _eCartelera_",
+            "sensacine":  "🌐 _SensaCine_",
+        }.get(p.get("_fuente", ""), "")
+
+        block = f"*{titulo_esc}*\n"
+        info_line = "  ".join(x for x in [nota_str, dur_str, dir_str] if x)
+        if info_line:
+            block += info_line + "\n"
         if p.get("sinopsis"):
-            sinopsis = p["sinopsis"][:150] + "..." if len(p["sinopsis"]) > 150 else p["sinopsis"]
-            block += f"_{sinopsis}_\n"
+            sin = p["sinopsis"]
+            sin_esc = _escape_markdown(sin[:150] + ("..." if len(sin) > 150 else ""))
+            block += f"_{sin_esc}_\n"
         if cines_str:
-            block += f"{cines_str}\n"
+            block += cines_str + "\n"
         if p.get("url_imdb"):
             block += f"[Ver en IMDB]({p['url_imdb']})\n"
+        if fuente_badge:
+            block += fuente_badge + "\n"
         block += "\n"
         lines.append(block)
 
     return "".join(lines)
 
-# ──────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ENVIAR POR TELEGRAM
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
-def send_telegram(text: str, token: str, chat_id: str):
-    """Envía mensaje por Telegram dividiendo si es muy largo."""
-    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
-
-    # Telegram tiene límite de 4096 chars por mensaje
+def send_telegram(text: str, token: str, chat_id: str) -> None:
+    """
+    Envía un mensaje por Telegram dividiendo en chunks de 4000 chars.
+    Lanza RuntimeError con el código HTTP si la API responde con error.
+    """
+    api_url    = f"https://api.telegram.org/bot{token}/sendMessage"
     chunk_size = 4000
-    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    chunks     = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, start=1):
         payload = json.dumps({
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
+            "chat_id":                 chat_id,
+            "text":                    chunk,
+            "parse_mode":              "Markdown",
+            "disable_web_page_preview": True,
         }).encode("utf-8")
+
         req = urllib.request.Request(
             api_url,
             data=payload,
             headers={"Content-Type": "application/json"},
-            method="POST"
+            method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-            if not result.get("ok"):
-                raise RuntimeError(f"Error Telegram: {result}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                if not result.get("ok"):
+                    raise RuntimeError(f"Telegram API error (chunk {idx}): {result}")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"HTTP {e.code} al enviar chunk {idx} a Telegram: {body}"
+            ) from e
 
 
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # MAIN
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="Cartelera de cine de Madrid con filtro por perfil")
-    parser.add_argument("--cine", help="Filtrar por nombre de cine (parcial)")
-    parser.add_argument("--min-nota", type=float, help="Nota mínima global (sobreescribe perfil)")
-    parser.add_argument("--perfil", help="Ruta a JSON con perfil de usuario personalizado")
-    parser.add_argument("--telegram", action="store_true", help="Enviar resultado por Telegram")
-    parser.add_argument("--json", action="store_true", help="Salida en formato JSON")
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Cartelera de cine de Madrid con filtro por perfil de usuario"
+    )
+    parser.add_argument("--cine",       help="Filtrar por nombre de cine (coincidencia parcial)")
+    parser.add_argument("--min-nota",   type=float, help="Nota mínima IMDB global (sobreescribe perfil)")
+    parser.add_argument("--perfil",     help="Ruta a JSON con perfil de usuario personalizado")
+    parser.add_argument("--telegram",   action="store_true", help="Enviar resultado por Telegram")
+    parser.add_argument("--json",       action="store_true", help="Salida en formato JSON")
     parser.add_argument("--sin-filtro", action="store_true", help="Mostrar toda la cartelera sin filtrar")
+    parser.add_argument(
+        "--fuente",
+        choices=["auto", "ecartelera", "sensacine"],
+        default="auto",
+        help="Fuente de datos del scraper (default: auto)",
+    )
     args = parser.parse_args()
 
-    # Cargar perfil
+    # ── Cargar perfil ──────────────────────────────────────────────────────
     perfil = DEFAULT_USER_PROFILE
-    if args.perfil and os.path.exists(args.perfil):
+    if args.perfil:
+        if not os.path.exists(args.perfil):
+            print(f"ERROR: No se encontró el fichero de perfil: {args.perfil}", file=sys.stderr)
+            sys.exit(1)
         with open(args.perfil, "r", encoding="utf-8") as f:
             perfil = json.load(f)
 
-    # Obtener cartelera
-    peliculas = get_cartelera_madrid(filtro_cine=args.cine)
+    # ── Validar variables Telegram antes de empezar ────────────────────────
+    if args.telegram and (not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID):
+        print(
+            "ERROR: Define TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID como variables de entorno.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    # Enriquecer con IMDB
+    # ── Pipeline principal ─────────────────────────────────────────────────
+    peliculas = get_cartelera_madrid(filtro_cine=args.cine)
     peliculas = enrich_with_imdb(peliculas)
 
-    # Aplicar filtro de perfil
     if not args.sin_filtro:
         peliculas = apply_user_profile(peliculas, perfil, nota_minima=args.min_nota)
 
-    # Salida
+    # ── Salida ─────────────────────────────────────────────────────────────
     if args.json:
         print(json.dumps(peliculas, ensure_ascii=False, indent=2))
+
     elif args.telegram:
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            print("ERROR: Define TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID como variables de entorno.", file=sys.stderr)
-            sys.exit(1)
         msg = format_telegram_message(peliculas, filtro_cine=args.cine)
         send_telegram(msg, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
         print(f"[OK] Mensaje enviado por Telegram ({len(peliculas)} películas).")
+
     else:
         msg = format_telegram_message(peliculas, filtro_cine=args.cine)
-        # Quitar markdown para consola
-        msg_plain = re.sub(r'[*_`\[\]()]', '', msg)
+        # Quitar marcado Markdown para consola
+        msg_plain = re.sub(r"[*_`\[\]()\\]", "", msg)
         print(msg_plain)
 
 
