@@ -1,132 +1,120 @@
 {
-  "interactionModel": {
-    "languageModel": {
-      "invocationName": "películas info",
-      "intents": [
-        {
-          "name": "NotaPeliculaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "cuál es la nota de {pelicula}",
-            "qué nota tiene {pelicula}",
-            "cómo está valorada {pelicula}",
-            "cuál es la puntuación de {pelicula}",
-            "qué calificación tiene {pelicula}",
-            "cuánto vale {pelicula}",
-            "qué rating tiene {pelicula}",
-            "dame la nota de {pelicula}",
-            "nota de {pelicula}"
-          ]
-        },
-        {
-          "name": "SinopsisPeliculaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "de qué va {pelicula}",
-            "cuéntame la trama de {pelicula}",
-            "cuál es la sinopsis de {pelicula}",
-            "de qué trata {pelicula}",
-            "háblame de {pelicula}",
-            "sinopsis de {pelicula}",
-            "cuéntame {pelicula}",
-            "qué pasa en {pelicula}",
-            "resumen de {pelicula}"
-          ]
-        },
-        {
-          "name": "DirectorPeliculaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "quién dirigió {pelicula}",
-            "quién es el director de {pelicula}",
-            "director de {pelicula}",
-            "quién hizo {pelicula}",
-            "quién filmó {pelicula}",
-            "quién realizó {pelicula}",
-            "quien es la directora de {pelicula}"
-          ]
-        },
-        {
-          "name": "DuracionPeliculaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "cuánto dura {pelicula}",
-            "duración de {pelicula}",
-            "cuántos minutos dura {pelicula}",
-            "cuánto tiempo dura {pelicula}",
-            "duración de la película {pelicula}",
-            "cuántas horas dura {pelicula}"
-          ]
-        },
-        {
-          "name": "VotosPeliculaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "cuántos votos tiene {pelicula}",
-            "cuánta gente valoró {pelicula}",
-            "votos de {pelicula}",
-            "cuántas valoraciones tiene {pelicula}",
-            "cuántas reseñas tiene {pelicula}"
-          ]
-        },
-        {
-          "name": "InfoCompletaIntent",
-          "slots": [
-            {
-              "name": "pelicula",
-              "type": "AMAZON.Movie"
-            }
-          ],
-          "samples": [
-            "dame información de {pelicula}",
-            "dime todo sobre {pelicula}",
-            "información de {pelicula}",
-            "cuéntame todo de {pelicula}",
-            "datos de {pelicula}",
-            "ficha de {pelicula}",
-            "todo sobre {pelicula}",
-            "qué sabes de {pelicula}"
-          ]
-        },
-        {
-          "name": "AMAZON.HelpIntent"
-        },
-        {
-          "name": "AMAZON.CancelIntent"
-        },
-        {
-          "name": "AMAZON.StopIntent"
-        },
-        {
-          "name": "AMAZON.NavigateHomeIntent"
+    "interactionModel": {
+        "languageModel": {
+            "invocationName": "info pelis",
+            "intents": [
+                {
+                    "name": "AMAZON.CancelIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.HelpIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StopIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NavigateHomeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.FallbackIntent",
+                    "samples": []
+                },
+                {
+                    "name": "NotaIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Cuál es la puntuación de {pelicula}",
+                        "Cómo está valorada {pelicula}",
+                        "Qué nota tiene {pelicula}",
+                        "Dime la nota de la película {pelicula}",
+                        "Cuál es la nota de {pelicula}"
+                    ]
+                },
+                {
+                    "name": "DirectorIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Quién dirigió {pelicula}",
+                        "Dime el director de la película {pelicula}",
+                        "Quién es el director de {pelicula}"
+                    ]
+                },
+                {
+                    "name": "GenerosIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Dime los géneros de la película {pelicula}",
+                        "Cuáles son los géneros de {pelicula}"
+                    ]
+                },
+                {
+                    "name": "FechaIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Cuándo se estrenó {pelicula}",
+                        "Cuándo fue la fecha de estreno de {pelicula}",
+                        "Dime la fecha de estreno de {pelicula}",
+                        "Cuándo salió {pelicula}",
+                        "Cuándo fue la fecha de salida de {pelicula}",
+                        "Dime la fecha de salida de la película {pelicula}"
+                    ]
+                },
+                {
+                    "name": "SinopsisIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Cuéntame la trama de {pelicula}",
+                        "De qué va {pelicula}",
+                        "Cuál es la sinopsis de {pelicula}",
+                        "Dime la sinopsis de la película {pelicula}"
+                    ]
+                },
+                {
+                    "name": "DuracionIntent",
+                    "slots": [
+                        {
+                            "name": "pelicula",
+                            "type": "AMAZON.Movie"
+                        }
+                    ],
+                    "samples": [
+                        "Cuántas horas dura {pelicula}",
+                        "Cuánto tiempo dura {pelicula}",
+                        "Cuánto dura {pelicula}",
+                        "Dime la duración de la película {pelicula}"
+                    ]
+                }
+            ],
+            "types": []
         }
-      ],
-      "types": []
     }
-  }
 }
