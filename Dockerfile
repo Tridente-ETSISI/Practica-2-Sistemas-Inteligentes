@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir \
 
 COPY . .
 
-EXPOSE 8080
+EXPOSE 8026
 
-CMD ["python", "api_server.py", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "api_server.py", "--host", "0.0.0.0", "--port", "8026"]

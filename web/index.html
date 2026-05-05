@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CineBot — Agente de Películas</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Special+Elite&family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- MARQUEE HEADER -->
+  <header class="site-header">
+    <div class="marquee-wrap">
+      <div class="marquee-track">
+        <span>AHORA EN CARTELERA &nbsp;✦&nbsp; NOW PLAYING &nbsp;✦&nbsp; CARTELERA MADRID &nbsp;✦&nbsp; INFORMACIÓN DE PELÍCULAS &nbsp;✦&nbsp; AHORA EN CARTELERA &nbsp;✦&nbsp; NOW PLAYING &nbsp;✦&nbsp; CARTELERA MADRID &nbsp;✦&nbsp; INFORMACIÓN DE PELÍCULAS &nbsp;✦&nbsp;</span>
+        <span aria-hidden="true">AHORA EN CARTELERA &nbsp;✦&nbsp; NOW PLAYING &nbsp;✦&nbsp; CARTELERA MADRID &nbsp;✦&nbsp; INFORMACIÓN DE PELÍCULAS &nbsp;✦&nbsp; AHORA EN CARTELERA &nbsp;✦&nbsp; NOW PLAYING &nbsp;✦&nbsp; CARTELERA MADRID &nbsp;✦&nbsp; INFORMACIÓN DE PELÍCULAS &nbsp;✦&nbsp;</span>
+      </div>
+    </div>
+
+    <div class="logo-wrap">
+      <div class="logo-lights">
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+      </div>
+      <h1 class="logo">
+        <span class="logo-cine">CINE</span><span class="logo-bot">BOT</span>
+      </h1>
+      <div class="logo-lights">
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+        <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+      </div>
+    </div>
+
+    <p class="tagline">Tu agente inteligente de cine · Powered by LLM + Playwright</p>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- ── TAB NAV ── -->
+    <nav class="tab-nav" role="tablist">
+      <button class="tab-btn active" role="tab" data-tab="chat"     aria-selected="true">
+        <span class="tab-icon">💬</span> Consulta libre
+      </button>
+      <button class="tab-btn" role="tab" data-tab="buscar"  aria-selected="false">
+        <span class="tab-icon">🔍</span> Buscar película
+      </button>
+      <button class="tab-btn" role="tab" data-tab="cartelera" aria-selected="false">
+        <span class="tab-icon">📽</span> Cartelera Madrid
+      </button>
+    </nav>
+
+    <!-- ══════════════════════════════
+         TAB 1: CHAT LIBRE (pipeline completo)
+    ══════════════════════════════ -->
+    <section class="tab-panel active" id="tab-chat" role="tabpanel">
+      <div class="panel-header">
+        <h2>Consulta en lenguaje natural</h2>
+        <p>Pregunta lo que quieras: el agente entiende tu intención y consulta IMDB o la cartelera.</p>
+      </div>
+
+      <!-- Ejemplos rápidos -->
+      <div class="quick-examples">
+        <span class="examples-label">Prueba con:</span>
+        <button class="example-chip" data-text="¿Cuál es la nota de Interstellar?">¿Nota de Interstellar?</button>
+        <button class="example-chip" data-text="¿Quién dirigió El Padrino?">Director de El Padrino</button>
+        <button class="example-chip" data-text="De qué va Dune">Sinopsis de Dune</button>
+        <button class="example-chip" data-text="¿Qué ponen en Kinépolis esta semana?">Kinépolis esta semana</button>
+        <button class="example-chip" data-text="Dame toda la info de 2001: A Space Odyssey">Info de 2001</button>
+      </div>
+
+      <!-- Chat messages -->
+      <div class="chat-window" id="chat-window" aria-live="polite" aria-label="Conversación">
+        <div class="chat-message bot intro">
+          <span class="msg-avatar">🎬</span>
+          <div class="msg-bubble">
+            Hola, soy <strong>CineBot</strong>. Puedo darte información sobre cualquier película o mostrarte la cartelera de cine en Madrid. ¿En qué puedo ayudarte?
+          </div>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <form class="chat-form" id="chat-form" autocomplete="off">
+        <div class="input-wrap">
+          <input
+            type="text"
+            id="chat-input"
+            class="chat-input"
+            placeholder="¿Cuál es la nota de Blade Runner 2049?"
+            aria-label="Escribe tu pregunta"
+            maxlength="300"
+          />
+          <button type="submit" class="send-btn" aria-label="Enviar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ══════════════════════════════
+         TAB 2: BUSCAR PELÍCULA (API REST directa)
+    ══════════════════════════════ -->
+    <section class="tab-panel" id="tab-buscar" role="tabpanel">
+      <div class="panel-header">
+        <h2>Buscar película</h2>
+        <p>Escribe solo el nombre de la película y obtendrás la ficha completa vía API.</p>
+      </div>
+
+      <form class="search-form" id="search-form" autocomplete="off">
+        <div class="search-wrap">
+          <span class="search-icon">🎞</span>
+          <input
+            type="text"
+            id="search-input"
+            class="search-input"
+            placeholder="Nombre de la película..."
+            aria-label="Nombre de la película"
+            maxlength="200"
+          />
+          <button type="submit" class="search-btn">BUSCAR</button>
+        </div>
+
+        <!-- Campo opcional -->
+        <div class="field-selector">
+          <span class="field-label">Mostrar:</span>
+          <label class="radio-chip"><input type="radio" name="campo" value="" checked /> Todo</label>
+          <label class="radio-chip"><input type="radio" name="campo" value="nota" /> Nota</label>
+          <label class="radio-chip"><input type="radio" name="campo" value="director" /> Director</label>
+          <label class="radio-chip"><input type="radio" name="campo" value="sinopsis" /> Sinopsis</label>
+          <label class="radio-chip"><input type="radio" name="campo" value="duracion" /> Duración</label>
+          <label class="radio-chip"><input type="radio" name="campo" value="votos" /> Votos</label>
+        </div>
+      </form>
+
+      <div class="result-area" id="search-result" aria-live="polite"></div>
+    </section>
+
+    <!-- ══════════════════════════════
+         TAB 3: CARTELERA MADRID
+    ══════════════════════════════ -->
+    <section class="tab-panel" id="tab-cartelera" role="tabpanel">
+      <div class="panel-header">
+        <h2>Cartelera de Madrid</h2>
+        <p>Películas en cartelera esta semana, filtradas y enriquecidas con datos de IMDB.</p>
+      </div>
+
+      <div class="cartelera-controls">
+        <div class="search-wrap cine-search-wrap">
+          <span class="search-icon">🏛</span>
+          <input
+            type="text"
+            id="cine-filter"
+            class="search-input"
+            placeholder="Filtrar por cine (ej: Kinépolis)..."
+            aria-label="Filtrar por cine"
+          />
+        </div>
+
+        <div class="cartelera-options">
+          <label class="option-label">Nota mínima:
+            <input type="number" id="min-nota" class="nota-input" min="0" max="10" step="0.5" value="" placeholder="—" />
+          </label>
+          <label class="option-label fuente-label">Fuente:
+            <select id="fuente-select" class="fuente-select">
+              <option value="auto">Auto</option>
+              <option value="ecartelera">eCartelera</option>
+              <option value="sensacine">Sensacine</option>
+            </select>
+          </label>
+        </div>
+
+        <button class="cartelera-btn" id="cartelera-btn">
+          <span class="btn-icon">📽</span> VER CARTELERA
+        </button>
+      </div>
+
+      <div class="result-area" id="cartelera-result" aria-live="polite"></div>
+    </section>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+    <p>CineBot · IMDB + Playwright + Ollama · <span id="api-url-display"></span></p>
+  </footer>
+
+  <!-- CONFIG MODAL (API URL) -->
+  <div class="modal-backdrop" id="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h3 id="modal-title">⚙️ Configuración</h3>
+      <label class="modal-label">
+        URL de la API REST
+        <input type="url" id="modal-api-url" class="modal-input" placeholder="http://localhost:8080" />
+      </label>
+      <div class="modal-actions">
+        <button class="modal-save" id="modal-save">Guardar</button>
+        <button class="modal-cancel" id="modal-cancel">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config gear button -->
+  <button class="gear-btn" id="gear-btn" aria-label="Configurar URL de la API" title="Configurar API">⚙</button>
+
+  <script src="app.js"></script>
+</body>
+</html>

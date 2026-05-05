@@ -3,13 +3,13 @@ services:
     build:
       context: .
     container_name: movie-agent-api
-    command: ["python", "api_server.py", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["python", "api_server.py", "--host", "0.0.0.0", "--port", "8026"]
     env_file:
       - .env
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
     ports:
-      - "8080:8080"
+      - "8026:8026"
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
