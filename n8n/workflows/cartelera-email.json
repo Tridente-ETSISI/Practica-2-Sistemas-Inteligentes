@@ -1,0 +1,131 @@
+{
+  "name": "cartelera-email",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -480,
+        -32
+      ],
+      "id": "460f80d1-cece-4c19-8495-b82548170992",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "http://movie-agent-api:8026/cartelera",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -272,
+        -32
+      ],
+      "id": "2e166317-5f86-4b09-baf4-1d5cb4222ada",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "sendTo": "jcarrerogalisteo@gmail.com",
+        "subject": "Cartelera de Madrid",
+        "message": "={{ $json.html_tabla }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        144,
+        -32
+      ],
+      "id": "ac088567-e414-421e-a712-bcaf437274ee",
+      "name": "Send a message",
+      "webhookId": "be66e95a-8768-4386-b4b3-6e1d72760a6b",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "tOyaDZTwtU7er7he",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let rows = \"\";\n\n// Recorremos todos los ítems que vienen de la API\nfor (const item of $input.all()) {\n  const p = item.json;\n  rows += `\n    <tr>\n      <td style=\"padding: 8px; border: 1px solid #ddd;\"><b>${p.titulo}</b></td>\n      <td style=\"padding: 8px; border: 1px solid #ddd; text-align: center;\">${p.num_cines || 0} cines</td>\n      <td style=\"padding: 8px; border: 1px solid #ddd; text-align: center;\">\n        <a href=\"${p.url_ficha}\">Ver ficha</a>\n      </td>\n    </tr>`;\n}\n\nreturn {\n  html_tabla: `\n    <h2>🎬 Cartelera de Madrid - Recomendaciones</h2>\n    <p>Aquí tienes las películas destacadas para esta semana:</p>\n    <table style=\"width:100%; border-collapse: collapse;\">\n      <thead>\n        <tr style=\"background-color: #f2f2f2;\">\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Título</th>\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Cines</th>\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Enlace</th>\n        </tr>\n      </thead>\n      <tbody>\n        ${rows}\n      </tbody>\n    </table>\n    <p style=\"font-size: 0.8em; color: grey;\">Fuente: ecartelera.com</p>`\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        -32
+      ],
+      "id": "9825bf50-6871-4b20-a816-5161375b4070",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0b839318-1fab-4a24-8edd-9466d6d90b38",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "079bc69b64bc3949db9a3520463fc1234caa213f1a7a90b13d6b0aaa8db98961"
+  },
+  "id": "QXOsnxkEkZAtWccM",
+  "tags": []
+}
