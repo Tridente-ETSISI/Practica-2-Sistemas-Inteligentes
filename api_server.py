@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "cartelera"))
 from movie_scraper import get_movie_info
 
 try:
-    from cartelera_madrid import get_cartelera_madrid
+    from cartelera_madrid import get_cartelera_madrid, enrich_with_imdb
     CARTELERA_AVAILABLE = True
 except ImportError:
     CARTELERA_AVAILABLE = False
@@ -233,6 +233,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             try:
                 peliculas = get_cartelera_madrid(filtro_cine=cine)
+                peliculas = enrich_with_imdb(peliculas) 
                 if min_nota:
                     try:
                         umbral = float(min_nota)
@@ -306,6 +307,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
                     try:
                         peliculas = get_cartelera_madrid(filtro_cine=filtro_cine, fuente=fuente)
+                        peliculas = enrich_with_imdb(peliculas) 
                         if nota_minima:
                             peliculas = [
                                 p for p in peliculas

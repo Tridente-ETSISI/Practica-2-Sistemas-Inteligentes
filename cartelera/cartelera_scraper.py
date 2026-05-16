@@ -18,6 +18,7 @@ Cada película devuelta tiene este formato:
     "director":      str | None,
     "sinopsis":      str | None,
     "cines":         list[str],  # cines de Madrid donde se proyecta
+    "num_cines":     int,        # número total de cines (ecartelera)
     "_fuente":       "ecartelera" | "sensacine"
   }
 
@@ -30,6 +31,11 @@ Uso standalone:
 Diagnóstico (si devuelve 0 películas):
   python cartelera_scraper.py --debug-html ecartelera
   → guarda /tmp/debug_ecartelera.html para inspeccionar los selectores CSS reales
+
+NOTA SOBRE --cine:
+  ecartelera.com no devuelve los nombres de cines individuales en su vista
+  principal (solo el número total). El filtro --cine solo funciona con
+  --fuente sensacine, que sí descarga la cartelera por cine.
 """
 
 import argparse
@@ -102,6 +108,9 @@ def _accept_cookies(page) -> None:
 
     Orden de selectores: primero los específicos de consentmanager (ecartelera),
     luego los genéricos para otras webs.
+
+    FIX: solo se silencian PlaywrightTimeout (elemento no encontrado).
+    Otros errores inesperados se loguean para no perder trazabilidad.
     """
     for selector in [
         # consentmanager.net (ecartelera.com)
@@ -126,7 +135,15 @@ def _accept_cookies(page) -> None:
                 timeout=3000,
             )
             return
-        except Exception:
+        except PlaywrightTimeout:
+            # Elemento no encontrado en esta página: es el caso normal
+            continue
+        except Exception as e:
+            # Error inesperado: loguear sin interrumpir el flujo
+            print(
+                f"[cookies] Error inesperado con selector '{selector}': {e}",
+                file=sys.stderr,
+            )
             continue
 
 
@@ -188,9 +205,11 @@ def _save_debug_html(page, nombre: str) -> None:
 #
 #   NOTA: los nombres de cines individuales NO están en esta vista.
 #   Solo aparece el número total de cines en Madrid donde se proyecta.
+#   Para filtrar por cine usa --fuente sensacine.
 # ══════════════════════════════════════════════════════════════════════════════
 
 ECARTELERA_URL = "https://www.ecartelera.com/cines/0,30,1.html"
+ECARTELERA_BASE = "https://www.ecartelera.com"
 
 
 def _parse_ecartelera_page(page) -> list[dict]:
@@ -229,7 +248,7 @@ def _parse_ecartelera_page(page) -> list[dict]:
         seen.add(titulo)
 
         href = titulo_el.get_attribute("href") or ""
-        url_ficha = href if href.startswith("http") else "https://www.ecartelera.com" + href
+        url_ficha = href if href.startswith("http") else ECARTELERA_BASE + href
 
         # Extraer numero de cines del texto "Horarios: N cines"
         showtimes_el = item.query_selector("p.showtimes a, .showtimes a")
@@ -261,7 +280,19 @@ def get_cartelera_ecartelera(
 
     Lanza RuntimeError si el scraping falla o devuelve 0 películas,
     para que el orquestador pueda activar el fallback a sensacine.
+
+    FIX: filtro_cine con ecartelera emite advertencia en lugar de devolver
+    silenciosamente 0 películas, ya que esta fuente no incluye nombres de
+    cines individuales. Para filtrar por cine, usar --fuente sensacine.
     """
+    # FIX: advertir al usuario antes de empezar si va a usar --cine con esta fuente
+    if filtro_cine:
+        print(
+            "[ecartelera] AVISO: ecartelera no devuelve nombres de cines individuales. "
+            "El filtro por cine no tendrá efecto. Usa --fuente sensacine para filtrar por cine.",
+            file=sys.stderr,
+        )
+
     print("[ecartelera] Cargando cartelera de Madrid...", file=sys.stderr)
 
     with sync_playwright() as p:
@@ -287,7 +318,8 @@ def get_cartelera_ecartelera(
             peliculas = _parse_ecartelera_page(page)
 
         finally:
-            # FIX: browser.close() solo una vez, siempre en finally
+            # FIX aplicado previamente: browser.close() solo una vez, siempre en finally
+            page.close()
             browser.close()
 
     print(f"[ecartelera] {len(peliculas)} películas extraídas.", file=sys.stderr)
@@ -299,11 +331,8 @@ def get_cartelera_ecartelera(
             "Ejecuta con --debug-html ecartelera para inspeccionar los selectores."
         )
 
-    if filtro_cine:
-        fl = filtro_cine.lower()
-        peliculas = [p for p in peliculas if any(fl in c.lower() for c in p["cines"])]
-        print(f"[ecartelera] {len(peliculas)} películas en '{filtro_cine}'.", file=sys.stderr)
-
+    # FIX: no aplicar filtro_cine con ecartelera porque cines=[] siempre.
+    # Se devuelven todas las películas. El usuario ya fue avisado arriba.
     return peliculas
 
 
@@ -321,9 +350,13 @@ def get_cartelera_ecartelera(
 #     <div class="synopsis-text">Sinopsis...</div>
 #     <span class="runtime">1h 48min</span>
 #   </article>
+#
+# NOTA: si los selectores devuelven 0 resultados, usar:
+#   python cartelera_scraper.py --debug-html sensacine
+# para inspeccionar el HTML real y actualizar los selectores.
 # ══════════════════════════════════════════════════════════════════════════════
 
-SENSACINE_CARTELERA_URL   = "https://www.sensacine.com/peliculas/en-cines/"
+SENSACINE_CARTELERA_URL    = "https://www.sensacine.com/peliculas/en-cines/"
 SENSACINE_CINES_MADRID_URL = "https://www.sensacine.com/cines/madrid/"
 
 
@@ -379,6 +412,7 @@ def _parse_sensacine_peliculas(page) -> list[dict]:
             "director":     _clean(director_el.inner_text() if director_el else None),
             "sinopsis":     _clean(sinopsis_el.inner_text() if sinopsis_el else None),
             "cines":        [],
+            "num_cines":    0,
             "_fuente":      "sensacine",
         })
 
@@ -444,6 +478,7 @@ def _match_cines(
                         cines = lista_cines
                         break
         peli["cines"] = cines
+        peli["num_cines"] = len(cines)
 
 
 def get_cartelera_sensacine(
@@ -453,15 +488,21 @@ def get_cartelera_sensacine(
     """
     Descarga la cartelera de Madrid desde sensacine.com usando Playwright.
     Combina la lista de películas con la información de cines de Madrid.
+
+    FIX: las dos páginas se cierran explícitamente antes de cerrar el browser.
+    FIX: _accept_cookies solo se llama en la primera página; el contexto
+         comparte cookies, por lo que el banner ya no aparece en la segunda.
     """
     print("[sensacine] Cargando cartelera de Madrid...", file=sys.stderr)
 
     with sync_playwright() as p:
         browser, context = _make_context(p)
+        page  = context.new_page()
+        page2 = context.new_page()
         try:
             # ── Paso A: lista de películas ─────────────────────────────────
-            page = context.new_page()
             page.goto(SENSACINE_CARTELERA_URL, wait_until="domcontentloaded", timeout=30000)
+            # FIX: _accept_cookies solo en la primera página del contexto
             _accept_cookies(page)
             try:
                 page.wait_for_selector(
@@ -480,9 +521,8 @@ def get_cartelera_sensacine(
             print(f"[sensacine] {len(peliculas)} películas extraídas.", file=sys.stderr)
 
             # ── Paso B: cines de Madrid ────────────────────────────────────
-            page2 = context.new_page()
+            # FIX: no llamar _accept_cookies(page2); el contexto ya aceptó cookies
             page2.goto(SENSACINE_CINES_MADRID_URL, wait_until="domcontentloaded", timeout=30000)
-            _accept_cookies(page2)
             try:
                 page2.wait_for_selector(
                     "div.theater-block, [class*='theater-block'], article.cinema",
@@ -499,7 +539,9 @@ def get_cartelera_sensacine(
             cines_por_pelicula = _parse_sensacine_cines(page2)
 
         finally:
-            # FIX: browser.close() solo una vez, siempre en finally
+            # FIX: cerrar páginas explícitamente antes del browser
+            page.close()
+            page2.close()
             browser.close()
 
     _match_cines(peliculas, cines_por_pelicula)
@@ -526,13 +568,15 @@ def get_cartelera_madrid_playwright(
 
     Parámetros:
       filtro_cine : solo devuelve películas en ese cine (coincidencia parcial).
+                    Solo funciona con fuente="sensacine". Con ecartelera se emite
+                    un aviso y se devuelven todas las películas.
       fuente      : "auto"       → ecartelera primero, sensacine si falla/vacío.
                     "ecartelera" → fuerza ecartelera.
                     "sensacine"  → fuerza sensacine.
       debug_html  : guarda HTML renderizado en /tmp/ para depurar selectores.
 
     Devuelve lista de dicts: titulo, url_ficha, genero, duracion_min,
-                             director, sinopsis, cines, _fuente.
+                             director, sinopsis, cines, num_cines, _fuente.
     """
     if fuente == "ecartelera":
         return get_cartelera_ecartelera(filtro_cine, debug_html=debug_html)
@@ -557,8 +601,14 @@ def get_cartelera_madrid_playwright(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Cartelera de Madrid con Playwright")
-    parser.add_argument("--cine",   help="Filtrar por nombre de cine (parcial)")
+    parser = argparse.ArgumentParser(
+        description="Cartelera de Madrid con Playwright",
+        epilog=(
+            "NOTA: --cine solo funciona con --fuente sensacine. "
+            "ecartelera no devuelve nombres de cines individuales."
+        ),
+    )
+    parser.add_argument("--cine",   help="Filtrar por nombre de cine (parcial, solo con sensacine)")
     parser.add_argument("--fuente", choices=["auto", "ecartelera", "sensacine"], default="auto")
     parser.add_argument("--json",   action="store_true", help="Salida JSON")
     parser.add_argument(
@@ -586,7 +636,7 @@ def main() -> None:
     print(f"  Cartelera de Madrid — {len(peliculas)} películas")
     print(f"{'═' * 55}")
     for p in peliculas:
-        cines_str = ", ".join(p["cines"][:3]) if p["cines"] else "cines no disponibles"
+        cines_str = ", ".join(p["cines"][:3]) if p["cines"] else f"{p.get('num_cines', 0)} cines"
         if len(p["cines"]) > 3:
             cines_str += f" (+{len(p['cines']) - 3})"
         dur = f"{p['duracion_min']} min" if p["duracion_min"] else "? min"

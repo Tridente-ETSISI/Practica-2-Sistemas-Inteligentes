@@ -8,16 +8,18 @@ Orquesta la cartelera de cine de Madrid:
   4. Formatea y opcionalmente envía el resultado por Telegram.
 
 Uso:
-  python cartelera_madrid.py                         # cartelera completa
-  python cartelera_madrid.py --cine "Cine Kinépolis" # filtrar por cine
-  python cartelera_madrid.py --telegram              # enviar por Telegram
-  python cartelera_madrid.py --min-nota 7.0          # solo nota >= 7.0
-  python cartelera_madrid.py --sin-filtro            # sin filtro de perfil
-  python cartelera_madrid.py --json                  # salida JSON
+  python cartelera_madrid.py                               # cartelera completa
+  python cartelera_madrid.py --cine "Cine Kinépolis"       # filtrar por cine (solo con sensacine)
+  python cartelera_madrid.py --telegram                    # enviar por Telegram
+  python cartelera_madrid.py --min-nota 7.0               # solo nota >= 7.0
+  python cartelera_madrid.py --perfil perfil_ejemplo.json  # perfil personalizado
+  python cartelera_madrid.py --sin-filtro                  # sin filtro de perfil
+  python cartelera_madrid.py --json                        # salida JSON
+  python cartelera_madrid.py --fuente sensacine            # forzar fuente
 
 Cron (todos los lunes a las 9:00):
   0 9 * * 1 cd /ruta/proyecto && python cartelera/cartelera_madrid.py --telegram \
-    >> /var/log/cartelera.log 2>&1
+    --perfil cartelera/perfil_ejemplo.json >> /var/log/cartelera.log 2>&1
 
 Variables de entorno:
   TELEGRAM_BOT_TOKEN  → token del bot de Telegram
@@ -33,9 +35,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── Path para importar módulos del proyecto ───────────────────────────────────
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scraper"))
-from movie_scraper import get_movie_info                            # noqa: E402
-from cartelera_scraper import get_cartelera_madrid_playwright       # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from scraper.movie_scraper import get_movie_info                         # noqa: E402
+from cartelera.cartelera_scraper import get_cartelera_madrid_playwright  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN
@@ -45,26 +47,24 @@ TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID:   str = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Número máximo de películas a las que se consultará IMDB.
-# El scraper ya incluye género, director y sinopsis de la web de cartelera;
-# IMDB añade nota, votos y URL oficial. Ajustar según velocidad deseada.
 MAX_IMDB_ENRICHMENT: int = 30
-MAX_WORKERS: int = 8  # peticiones simultáneas a IMDB
+# FIX: MAX_WORKERS definido una sola vez (había duplicado)
 MAX_WORKERS: int = 8  # peticiones simultáneas a IMDB
 
 # Perfil de usuario por defecto.
 # Se puede sobreescribir con --perfil <ruta_json>.
 DEFAULT_USER_PROFILE: dict = {
     "generos": {
-        "Acción":         6.5,
-        "Aventura":       6.5,
-        "Animación":      7.0,
-        "Comedia":        6.0,
-        "Drama":          7.0,
-        "Terror":         6.0,
-        "Thriller":       6.5,
-        "Ciencia ficción":6.0,
-        "Romance":        5.5,
-        "Documental":     7.0,
+        "Acción":          6.5,
+        "Aventura":        6.5,
+        "Animación":       7.0,
+        "Comedia":         6.0,
+        "Drama":           7.0,
+        "Terror":          6.0,
+        "Thriller":        6.5,
+        "Ciencia ficción": 6.0,
+        "Romance":         5.5,
+        "Documental":      7.0,
     },
     "directores_favoritos": [],   # ej: ["Christopher Nolan", "Denis Villeneuve"]
     "nota_minima_global":   5.0,  # umbral si el género no está en el perfil
@@ -75,17 +75,26 @@ DEFAULT_USER_PROFILE: dict = {
 # OBTENER CARTELERA
 # ──────────────────────────────────────────────────────────────────────────────
 
-def get_cartelera_madrid(filtro_cine: str | None = None) -> list[dict]:
+def get_cartelera_madrid(
+    filtro_cine: str | None = None,
+    fuente: str = "auto",
+) -> list[dict]:
     """
     Devuelve la cartelera de Madrid usando el scraper Playwright.
 
+    FIX: ahora recibe y propaga el argumento `fuente` para que --fuente
+    desde el CLI tenga efecto real (antes se ignoraba silenciosamente).
+
     El scraper ya incluye: titulo, url_ficha, genero, duracion_min,
-    director, sinopsis, cines, _fuente.
+    director, sinopsis, cines, num_cines, _fuente.
     Esta función NO hace peticiones adicionales; confía en lo que
-    devuelve cartelera_scraper.py (eliminando la duplicación anterior).
+    devuelve cartelera_scraper.py.
     """
     print("[Cartelera] Descargando cartelera de Madrid...", file=sys.stderr)
-    peliculas = get_cartelera_madrid_playwright(filtro_cine=filtro_cine)
+    peliculas = get_cartelera_madrid_playwright(
+        filtro_cine=filtro_cine,
+        fuente=fuente,
+    )
     print(f"[Cartelera] {len(peliculas)} películas encontradas.", file=sys.stderr)
     return peliculas
 
@@ -101,6 +110,10 @@ def enrich_with_imdb(peliculas: list[dict]) -> list[dict]:
     Las primeras MAX_IMDB_ENRICHMENT se consultan en paralelo con
     ThreadPoolExecutor para reducir el tiempo de espera notablemente.
     Las películas fuera de ese límite conservan nota_imdb=None.
+
+    FIX: la lógica de captura de excepciones es consistente.
+    Los errores se loguean dentro de _fetch y no se relanza desde
+    future.result(), evitando la contradicción anterior.
     """
     # Inicializar campos IMDB en todas las películas
     for peli in peliculas:
@@ -113,9 +126,11 @@ def enrich_with_imdb(peliculas: list[dict]) -> list[dict]:
 
     def _fetch(args: tuple[int, dict]) -> None:
         idx, peli = args
+        # FIX: extraer titulo antes para evitar f-strings con índices anidados
+        titulo = peli["titulo"]
         try:
-            print(f"[IMDB] ({idx + 1}/{total}) '{peli["titulo"]}'...", file=sys.stderr)
-            imdb_data = get_movie_info(peli["titulo"])
+            print(f"[IMDB] ({idx + 1}/{total}) '{titulo}'...", file=sys.stderr)
+            imdb_data = get_movie_info(titulo)
             peli["nota_imdb"] = imdb_data.get("nota")
             peli["votos"]     = imdb_data.get("votos")
             peli["url_imdb"]  = imdb_data.get("url_imdb")
@@ -125,15 +140,17 @@ def enrich_with_imdb(peliculas: list[dict]) -> list[dict]:
             if not peli.get("sinopsis"):
                 peli["sinopsis"] = imdb_data.get("sinopsis")
         except Exception as e:
-            print(f"[IMDB] Error con '{peli["titulo"]}': {e}", file=sys.stderr)
+            # FIX: los errores se loguean aquí; future.result() no relanza
+            print(f"[IMDB] Error con '{titulo}': {e}", file=sys.stderr)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [
             executor.submit(_fetch, (i, peli))
             for i, peli in enumerate(a_enriquecer)
         ]
+        # FIX: future.result() no intenta propagar excepciones ya capturadas
         for future in as_completed(futures):
-            future.result()  # propaga excepciones no capturadas en _fetch
+            future.result()
 
     return peliculas
 
@@ -152,7 +169,9 @@ def apply_user_profile(
 
     Reglas (en orden de prioridad):
       1. Si el director está en directores_favoritos → siempre incluir.
-      2. Si nota_imdb es None → incluir (no tenemos datos suficientes para excluir).
+         NOTA: si director=None (IMDB no lo encontró), esta regla no aplica.
+      2. Si nota_imdb es None y se pasó --min-nota → excluir.
+         Si nota_imdb es None y solo hay perfil → incluir (beneficio de la duda).
       3. Si el género del perfil define una nota mínima → aplicarla.
       4. Si el género no está en el perfil → usar nota_minima o nota_minima_global.
 
@@ -170,6 +189,8 @@ def apply_user_profile(
         director = (peli.get("director") or "").lower()
 
         # Regla 1: director favorito siempre pasa
+        # NOTA: si director es None/vacío esta regla no puede aplicarse,
+        # aunque el director real pueda ser un favorito. Limitación conocida.
         if directores_fav and any(fav in director for fav in directores_fav if fav):
             peli["_razon_inclusion"] = f"Director favorito: {peli.get('director')}"
             resultado.append(peli)
@@ -185,7 +206,7 @@ def apply_user_profile(
             resultado.append(peli)
             continue
 
-        # Regla 3-4: determinar umbral para este género
+        # Reglas 3-4: determinar umbral para este género
         umbral = nota_global
         for gen_key, gen_nota in generos.items():
             if gen_key.lower() in genero.lower():
@@ -194,7 +215,7 @@ def apply_user_profile(
 
         if nota >= umbral:
             peli["_razon_inclusion"] = (
-                f"Nota {nota} ≥ umbral {umbral} (género: '{genero}')"
+                f"Nota {nota} >= umbral {umbral} (género: '{genero}')"
             )
             resultado.append(peli)
 
@@ -208,8 +229,10 @@ def apply_user_profile(
 
 def _escape_markdown(text: str) -> str:
     """
-    Escapa caracteres especiales de Markdown de Telegram (modo estándar).
-    Evita que títulos con *, _, [ o ] rompan el mensaje.
+    Escapa caracteres especiales de Markdown de Telegram (modo legacy/estándar).
+    Aplica solo a: * _ ` [ ]
+    NOTA: esta función es para parse_mode='Markdown' (legacy).
+    Si se migra a MarkdownV2 hay que ampliarla con: . ! ( ) + - = { } | ~ >
     """
     return re.sub(r"([*_`\[\]])", r"\\\1", text)
 
@@ -232,7 +255,7 @@ def format_telegram_message(
         titulo_esc = _escape_markdown(p["titulo"])
 
         nota_str = f"⭐ {p['nota_imdb']}" if p.get("nota_imdb") else "⭐ N/A"
-        # duracion_min viene del scraper; duracion (minutos) puede venir de IMDB
+        # duracion_min viene del scraper; duracion puede venir de IMDB
         duracion = p.get("duracion_min") or p.get("duracion")
         dur_str  = f"⏱ {duracion} min" if duracion else ""
         dir_str  = f"🎭 {_escape_markdown(p['director'])}" if p.get("director") else ""
@@ -242,6 +265,8 @@ def format_telegram_message(
             cines_str = "🏛 " + ", ".join(p["cines"][:3])
             if len(p["cines"]) > 3:
                 cines_str += f" (+{len(p['cines']) - 3})"
+        elif p.get("num_cines"):
+            cines_str = f"🏛 {p['num_cines']} cines en Madrid"
 
         fuente_badge = {
             "ecartelera": "🌐 _eCartelera_",
@@ -276,6 +301,9 @@ def send_telegram(text: str, token: str, chat_id: str) -> None:
     """
     Envía un mensaje por Telegram dividiendo en chunks de 4000 chars.
     Lanza RuntimeError con el código HTTP si la API responde con error.
+
+    Usa parse_mode='Markdown' (modo legacy). Los caracteres especiales
+    deben haberse escapado previamente con _escape_markdown().
     """
     api_url    = f"https://api.telegram.org/bot{token}/sendMessage"
     chunk_size = 4000
@@ -283,9 +311,9 @@ def send_telegram(text: str, token: str, chat_id: str) -> None:
 
     for idx, chunk in enumerate(chunks, start=1):
         payload = json.dumps({
-            "chat_id":                 chat_id,
-            "text":                    chunk,
-            "parse_mode":              "Markdown",
+            "chat_id":                  chat_id,
+            "text":                     chunk,
+            "parse_mode":               "Markdown",
             "disable_web_page_preview": True,
         }).encode("utf-8")
 
@@ -313,9 +341,13 @@ def send_telegram(text: str, token: str, chat_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Cartelera de cine de Madrid con filtro por perfil de usuario"
+        description="Cartelera de cine de Madrid con filtro por perfil de usuario",
+        epilog=(
+            "NOTA: --cine solo tiene efecto con --fuente sensacine. "
+            "ecartelera no devuelve nombres de cines individuales."
+        ),
     )
-    parser.add_argument("--cine",       help="Filtrar por nombre de cine (coincidencia parcial)")
+    parser.add_argument("--cine",       help="Filtrar por nombre de cine (parcial, solo con sensacine)")
     parser.add_argument("--min-nota",   type=float, help="Nota mínima IMDB global (sobreescribe perfil)")
     parser.add_argument("--perfil",     help="Ruta a JSON con perfil de usuario personalizado")
     parser.add_argument("--telegram",   action="store_true", help="Enviar resultado por Telegram")
@@ -347,7 +379,8 @@ def main() -> None:
         sys.exit(1)
 
     # ── Pipeline principal ─────────────────────────────────────────────────
-    peliculas = get_cartelera_madrid(filtro_cine=args.cine)
+    # FIX: args.fuente se propaga correctamente a get_cartelera_madrid()
+    peliculas = get_cartelera_madrid(filtro_cine=args.cine, fuente=args.fuente)
     peliculas = enrich_with_imdb(peliculas)
 
     if not args.sin_filtro:
