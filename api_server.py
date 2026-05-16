@@ -31,15 +31,15 @@ from pathlib import Path
 # Se puede sobreescribir con la variable de entorno WEB_DIR.
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).parent / "web"))
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scraper"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "cartelera"))
+sys.path.insert(0, os.path.dirname(__file__))
 
-from movie_scraper import get_movie_info
+from scraper.movie_scraper import get_movie_info
 
 try:
-    from cartelera_madrid import get_cartelera_madrid, enrich_with_imdb
+    from cartelera.cartelera_madrid import get_cartelera_madrid, enrich_with_imdb
     CARTELERA_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print(f"[WARN] Cartelera no disponible: {e}", file=sys.stderr)
     CARTELERA_AVAILABLE = False
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")

@@ -18,10 +18,10 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        -480,
-        -32
+        0,
+        0
       ],
-      "id": "460f80d1-cece-4c19-8495-b82548170992",
+      "id": "aac41cfd-960a-419d-8bda-969ca751bd61",
       "name": "Schedule Trigger"
     },
     {
@@ -32,47 +32,48 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -272,
-        -32
+        208,
+        0
       ],
-      "id": "2e166317-5f86-4b09-baf4-1d5cb4222ada",
+      "id": "467629df-cc2b-4ff1-bf58-7e668f1afc6f",
       "name": "HTTP Request"
     },
     {
       "parameters": {
-        "sendTo": "jcarrerogalisteo@gmail.com",
-        "subject": "Cartelera de Madrid",
-        "message": "={{ $json.html_tabla }}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.2,
-      "position": [
-        144,
-        -32
-      ],
-      "id": "ac088567-e414-421e-a712-bcaf437274ee",
-      "name": "Send a message",
-      "webhookId": "be66e95a-8768-4386-b4b3-6e1d72760a6b",
-      "credentials": {
-        "gmailOAuth2": {
-          "id": "tOyaDZTwtU7er7he",
-          "name": "Gmail account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "let rows = \"\";\n\n// Recorremos todos los ítems que vienen de la API\nfor (const item of $input.all()) {\n  const p = item.json;\n  rows += `\n    <tr>\n      <td style=\"padding: 8px; border: 1px solid #ddd;\"><b>${p.titulo}</b></td>\n      <td style=\"padding: 8px; border: 1px solid #ddd; text-align: center;\">${p.num_cines || 0} cines</td>\n      <td style=\"padding: 8px; border: 1px solid #ddd; text-align: center;\">\n        <a href=\"${p.url_ficha}\">Ver ficha</a>\n      </td>\n    </tr>`;\n}\n\nreturn {\n  html_tabla: `\n    <h2>🎬 Cartelera de Madrid - Recomendaciones</h2>\n    <p>Aquí tienes las películas destacadas para esta semana:</p>\n    <table style=\"width:100%; border-collapse: collapse;\">\n      <thead>\n        <tr style=\"background-color: #f2f2f2;\">\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Título</th>\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Cines</th>\n          <th style=\"padding: 8px; border: 1px solid #ddd;\">Enlace</th>\n        </tr>\n      </thead>\n      <tbody>\n        ${rows}\n      </tbody>\n    </table>\n    <p style=\"font-size: 0.8em; color: grey;\">Fuente: ecartelera.com</p>`\n};"
+        "jsCode": "let rows = \"\";\n\nfor (const item of $input.all()) {\n  const p = item.json;\n\n  const nota     = p.nota_imdb  ? `⭐ ${p.nota_imdb}/10` : \"Sin nota\";\n  const director = p.director   ? `🎭 ${p.director}`      : \"\";\n  const sinopsis = p.sinopsis\n    ? p.sinopsis.substring(0, 150) + (p.sinopsis.length > 150 ? \"...\" : \"\")\n    : \"Sin sinopsis disponible\";\n  const cines    = p.num_cines  ? `${p.num_cines} cines`  : \"—\";\n\n  rows += `\n    <tr>\n      <td style=\"padding: 10px; border: 1px solid #ddd;\">\n        <b>${p.titulo}</b><br>\n        <span style=\"color: #666; font-size: 0.85em;\">${director}</span>\n      </td>\n      <td style=\"padding: 10px; border: 1px solid #ddd; text-align: center; color: #e6a817;\">\n        ${nota}\n      </td>\n      <td style=\"padding: 10px; border: 1px solid #ddd; font-size: 0.85em; color: #444;\">\n        ${sinopsis}\n      </td>\n      <td style=\"padding: 10px; border: 1px solid #ddd; text-align: center;\">\n        ${cines}<br>\n        <a href=\"${p.url_ficha}\" style=\"font-size: 0.85em;\">Ver ficha</a>\n        ${p.url_imdb ? `| <a href=\"${p.url_imdb}\" style=\"font-size: 0.85em;\">IMDB</a>` : \"\"}\n      </td>\n    </tr>`;\n}\n\nconst fecha = new Date().toLocaleDateString(\"es-ES\", {\n  weekday: \"long\", year: \"numeric\", month: \"long\", day: \"numeric\"\n});\n\n// FIX: return con la estructura correcta de n8n\nreturn [{\n  json: {\n    html_tabla: `\n      <h2>🎬 Cartelera de Madrid</h2>\n      <p>Recomendaciones para la semana del <b>${fecha}</b>:</p>\n      <table style=\"width:100%; border-collapse: collapse; font-family: Arial, sans-serif;\">\n        <thead>\n          <tr style=\"background-color: #1a1a2e; color: white;\">\n            <th style=\"padding: 10px; border: 1px solid #ddd; text-align: left;\">Película</th>\n            <th style=\"padding: 10px; border: 1px solid #ddd;\">Nota IMDB</th>\n            <th style=\"padding: 10px; border: 1px solid #ddd; text-align: left;\">Sinopsis</th>\n            <th style=\"padding: 10px; border: 1px solid #ddd;\">Cines / Enlace</th>\n          </tr>\n        </thead>\n        <tbody>\n          ${rows}\n        </tbody>\n      </table>\n      <p style=\"font-size: 0.8em; color: grey; margin-top: 16px;\">\n        Fuente: ecartelera.com + IMDB · Generado automáticamente cada lunes a las 9:00\n      </p>`\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -64,
-        -32
+        416,
+        0
       ],
-      "id": "9825bf50-6871-4b20-a816-5161375b4070",
+      "id": "4202d8d0-342f-4069-b3aa-d3c08569ffbd",
       "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "fromEmail": "lucas.upm.proyectos@gmail.com",
+        "toEmail": "luc.tianming@gmail.com",
+        "subject": "cartelera madrid",
+        "html": "={{ $json.html_tabla }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "c2080df2-c064-4917-a65e-741fd215e69a",
+      "name": "Send an Email",
+      "webhookId": "ccc2c28a-fa92-4a92-b1bc-c1ecdf0258fa",
+      "credentials": {
+        "smtp": {
+          "id": "ifeaNSpdQoSrRpZe",
+          "name": "SMTP account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -99,16 +100,11 @@
         ]
       ]
     },
-    "Send a message": {
-      "main": [
-        []
-      ]
-    },
     "Code in JavaScript": {
       "main": [
         [
           {
-            "node": "Send a message",
+            "node": "Send an Email",
             "type": "main",
             "index": 0
           }
@@ -121,11 +117,11 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "0b839318-1fab-4a24-8edd-9466d6d90b38",
+  "versionId": "21922969-37f8-4afc-9bd6-6ca6a561c2ce",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "079bc69b64bc3949db9a3520463fc1234caa213f1a7a90b13d6b0aaa8db98961"
+    "instanceId": "6f9dd3413ebc7ab792b4e5754e761886becbee342f822c0d6c4da4263e43e4d0"
   },
-  "id": "QXOsnxkEkZAtWccM",
+  "id": "ibtoJSiA2cgG9GiB",
   "tags": []
 }
