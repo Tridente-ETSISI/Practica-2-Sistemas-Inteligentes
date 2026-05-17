@@ -339,9 +339,24 @@ class APIHandler(BaseHTTPRequestHandler):
 def _formato_campo(titulo: str, campo: str, valor) -> str:
     if valor is None:
         return f"No encontré '{campo}' para {titulo}."
+        
+    # Limpieza exhaustiva de los votos para evitar el crash del string
+    votos_formateados = valor
+    if campo == "votos":
+        try:
+            if isinstance(valor, str):
+                # Quitamos puntos, comas, espacios y letras (por si viniera un "K" o "M")
+                limpio = "".join(c for c in valor if c.isdigit())
+                votos_formateados = f"{int(limpio):,}"
+            else:
+                votos_formateados = f"{int(valor):,}"
+        except (ValueError, TypeError):
+            # Si el scraping falló estrepitosamente, dejamos el string crudo como fallback
+            votos_formateados = valor
+
     etiquetas = {
         "nota":     f"⭐ {titulo} tiene una nota de {valor}/10 en IMDB.",
-        "votos":    f"🗳 {titulo} tiene {valor:,} votos en IMDB.",
+        "votos":    f"🗳 {titulo} tiene {votos_formateados} votos en IMDB.",  # <-- Usamos la variable limpia
         "sinopsis": f"📖 Sinopsis de {titulo}: {valor}",
         "director": f"🎭 {titulo} fue dirigida por {valor}.",
         "duracion": f"⏱ {titulo} dura {valor} minutos.",

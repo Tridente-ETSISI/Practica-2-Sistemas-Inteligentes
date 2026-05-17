@@ -176,6 +176,18 @@ def format_movie_response(data: dict, campo: str | None) -> str:
     titulo = _escape_md(data.get("titulo", "Película"))
     badge  = _fuente_badge(data)
 
+    # Convertimos votos de forma segura a entero para el formateo con comas
+    raw_votos = data.get("votos")
+    try:
+        # Si viene como string con comas/puntos de la API, limpiamos y convertimos
+        if isinstance(raw_votos, str):
+            votos_int = int(raw_votos.replace(",", "").replace(".", ""))
+        else:
+            votos_int = int(raw_votos)
+        votos_formateados = f"{votos_int:,}"
+    except (ValueError, TypeError):
+        votos_formateados = str(raw_votos) if raw_votos is not None else "No disponible"
+
     if campo and campo != "todo":
         valor = data.get(campo)
         if valor is None:
@@ -183,7 +195,7 @@ def format_movie_response(data: dict, campo: str | None) -> str:
 
         etiquetas: dict[str, str] = {
             "nota":     f"⭐ La nota de *{titulo}* en IMDB es *{valor}*",
-            "votos":    f"🗳 *{titulo}* tiene *{valor:,}* votos en IMDB",
+            "votos":    f"🗳 *{titulo}* tiene *{votos_formateados}* votos en IMDB", # <-- Corregido
             "sinopsis": f"📖 *Sinopsis de {titulo}*:\n_{_escape_md(str(valor))}_",
             "director": f"🎭 *{titulo}* fue dirigida por *{_escape_md(str(valor))}*",
             "duracion": f"⏱ *{titulo}* dura *{valor} minutos*",
@@ -198,7 +210,7 @@ def format_movie_response(data: dict, campo: str | None) -> str:
     if data.get("nota"):
         lines.append(f"⭐ Nota IMDB: *{data['nota']}*")
     if data.get("votos"):
-        lines.append(f"🗳 Votos: {data['votos']:,}")
+        lines.append(f"🗳 Votos: {votos_formateados}") # <-- Corregido
     if data.get("director"):
         lines.append(f"🎭 Director: {_escape_md(data['director'])}")
     if data.get("duracion"):
@@ -225,21 +237,55 @@ async def _reply_long(
     texto: str,
 ) -> None:
     """
-    Edita wait_msg con el primer chunk y envía el resto como mensajes nuevos.
-    Centraliza la lógica de chunking para no repetirla en cada handler.
+    Envía textos largos dividiendo por líneas de forma segura 
+    para no romper las etiquetas de Markdown de Telegram.
     """
-    chunks = [texto[i:i + TELEGRAM_CHUNK_SIZE] for i in range(0, len(texto), TELEGRAM_CHUNK_SIZE)]
+    lines = texto.split("\n")
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for line in lines:
+        # Si una sola línea es más larga que el límite (raro), la metemos sola
+        if len(line) + 1 > TELEGRAM_CHUNK_SIZE:
+            if current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+            chunks.append(line)
+            continue
+
+        # Si añadir la línea supera el límite del chunk, cerramos el chunk actual
+        if current_length + len(line) + 1 > TELEGRAM_CHUNK_SIZE:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_length = len(line)
+        else:
+            current_chunk.append(line)
+            current_length += len(line) + 1
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    # Si por alguna razón no hay trozos, salimos
+    if not chunks:
+        return
+
+    # Enviar el primer bloque editando el mensaje de espera
     await wait_msg.edit_text(
         chunks[0],
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )
+
+    # Enviar los bloques restantes como nuevos mensajes
     for chunk in chunks[1:]:
-        await update.message.reply_text(
-            chunk,
-            parse_mode="Markdown",
-            disable_web_page_preview=True,
-        )
+        if chunk.strip(): # Evitamos enviar trozos vacíos
+            await update.message.reply_text(
+                chunk,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
