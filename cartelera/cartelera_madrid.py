@@ -262,7 +262,7 @@ def format_telegram_message(
 
         cines_str = ""
         if p.get("cines"):
-            cines_str = "🏛 " + ", ".join(p["cines"][:3])
+            cines_str = "🏛 " + ", ".join(_escape_markdown(c) for c in p["cines"][:3])
             if len(p["cines"]) > 3:
                 cines_str += f" (+{len(p['cines']) - 3})"
         elif p.get("num_cines"):
@@ -284,7 +284,9 @@ def format_telegram_message(
         if cines_str:
             block += cines_str + "\n"
         if p.get("url_imdb"):
-            block += f"[Ver en IMDB]({p['url_imdb']})\n"
+            # Evitar formato inline de Markdown que puede romperse si la URL contiene
+            # paréntesis u otros caracteres especiales. Enviar la URL en texto plano.
+            block += f"Ver en IMDB: {p['url_imdb']}\n"
         if fuente_badge:
             block += fuente_badge + "\n"
         block += "\n"

@@ -35,12 +35,16 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from scraper.movie_scraper import get_movie_info
 
+<<<<<<< HEAD
 try:
     from cartelera.cartelera_madrid import get_cartelera_madrid, enrich_with_imdb
     CARTELERA_AVAILABLE = True
 except ImportError as e:
     print(f"[WARN] Cartelera no disponible: {e}", file=sys.stderr)
     CARTELERA_AVAILABLE = False
+=======
+from cartelera_madrid import get_cartelera_madrid
+>>>>>>> 44b0003 (Cambios que espero que no den problemas cuando haya que mergear.)
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
@@ -223,9 +227,6 @@ class APIHandler(BaseHTTPRequestHandler):
 
         # /cartelera[?cine=X&min_nota=Y&fuente=Z]
         if url_path == "/cartelera":
-            if not CARTELERA_AVAILABLE:
-                self.send_json({"error": "cartelera_scraper.py no encontrado"}, 503)
-                return
 
             cine     = params.get("cine",     [None])[0]
             min_nota = params.get("min_nota",  [None])[0]

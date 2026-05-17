@@ -331,8 +331,12 @@ def get_cartelera_ecartelera(
             "Ejecuta con --debug-html ecartelera para inspeccionar los selectores."
         )
 
-    # FIX: no aplicar filtro_cine con ecartelera porque cines=[] siempre.
-    # Se devuelven todas las películas. El usuario ya fue avisado arriba.
+    # if filtro_cine:
+    #     fl = filtro_cine.lower()
+    #     print(f'PELICULAS: {peliculas}')
+    #     peliculas = [p for p in peliculas if any(fl in c.lower() for c in p["cines"])]
+    #     print(f"[ecartelera] {len(peliculas)} películas en '{filtro_cine}'.", file=sys.stderr)
+
     return peliculas
 
 
@@ -584,16 +588,24 @@ def get_cartelera_madrid_playwright(
     if fuente == "sensacine":
         return get_cartelera_sensacine(filtro_cine, debug_html=debug_html)
 
-    # "auto": ecartelera primero, sensacine como fallback
+    # Intentamos unir ambos resultados para tener más datos
     try:
-        return get_cartelera_ecartelera(filtro_cine, debug_html=debug_html)
+        ecartelera_peliculas = get_cartelera_ecartelera(filtro_cine, debug_html=debug_html)
     except Exception as e:
         print(
-            f"[cartelera] ecartelera falló: {e}\n  → Probando sensacine...",
+            f"[cartelera] ecartelera falló: {e}",
+            file=sys.stderr,
+        )
+    try:
+        sensacine_peliculas = get_cartelera_sensacine(filtro_cine, debug_html=debug_html)
+    except Exception as e:
+        print(
+            f"[cartelera] sensacine falló: {e}",
             file=sys.stderr,
         )
 
-    return get_cartelera_sensacine(filtro_cine, debug_html=debug_html)
+    # Unir los resultados de ambas fuentes
+    return ecartelera_peliculas + sensacine_peliculas
 
 
 # ──────────────────────────────────────────────────────────────────────────────

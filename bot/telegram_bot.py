@@ -221,7 +221,7 @@ def format_movie_response(data: dict, campo: str | None) -> str:
             sin = sin[:300] + "..."
         lines.append(f"📖 Sinopsis: _{_escape_md(sin)}_")
     if data.get("url_imdb"):
-        lines.append(f"[Ver en IMDB]({data['url_imdb']})")
+        lines.append(f"Ver en IMDB: {data['url_imdb']}")
     if badge:
         lines.append(f"\n{badge}")
     return "\n".join(lines)
