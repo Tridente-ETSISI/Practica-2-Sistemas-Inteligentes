@@ -1,4 +1,16 @@
 {
     "ROS2.distro": "jazzy",
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.autoComplete.extraPaths": [
+        "/home/jesus/ros2_ws/install/practica1/lib/python3.12/site-packages",
+        "/home/jesus/ros2_ws/install/datos_pkg/lib/python3.12/site-packages",
+        "/home/jesus/ros2_ws/install/datos_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/jesus/ros2_ws/install/practica1/lib/python3.12/site-packages",
+        "/home/jesus/ros2_ws/install/datos_pkg/lib/python3.12/site-packages",
+        "/home/jesus/ros2_ws/install/datos_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ]
 }
