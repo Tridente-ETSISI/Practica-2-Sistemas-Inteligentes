@@ -10,7 +10,7 @@ Endpoints:
   GET  /cartelera   [?cine=X][&min_nota=Y][&fuente=Z]
 
 Uso:
-  python api_server.py              # 0.0.0.0:8080
+  python api_server.py              # 0.0.0.0:8026
   python api_server.py --port 9000
 """
 
@@ -35,7 +35,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from scraper.movie_scraper import get_movie_info
 
-from cartelera_madrid import get_cartelera_madrid
+from cartelera.cartelera_madrid import get_cartelera_madrid, enrich_with_imdb
+CARTELERA_AVAILABLE = True
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
