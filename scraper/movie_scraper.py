@@ -865,7 +865,6 @@ def get_movie_data_fixed(movie_title):
         browser.close()
 
     return data
-# implementación de lucas
 
 def parse_nota(value):
     if value is None:
